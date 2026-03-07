@@ -29,6 +29,7 @@ interface LandingPageProps {
   onLogoClick?: () => void;
   darkMode?: boolean;
   onToggleDarkMode?: () => void;
+  onPrivacyClick?: () => void;
 }
 
 export default function LandingPage({
@@ -41,7 +42,8 @@ export default function LandingPage({
   onLogout,
   onLogoClick,
   darkMode: darkModeProp,
-  onToggleDarkMode
+  onToggleDarkMode,
+  onPrivacyClick
 }: LandingPageProps) {
   const [showDropdown, setShowDropdown] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -478,6 +480,14 @@ export default function LandingPage({
           >
             Version 8.0 | Q2 2026 Launch
           </p>
+          {onPrivacyClick && (
+            <p
+              onClick={onPrivacyClick}
+              className="text-sm mt-3 cursor-pointer hover:text-purple-600 dark:hover:text-purple-400 transition-colors underline"
+            >
+              Privacy Policy
+            </p>
+          )}
         </div>
       </footer>
 

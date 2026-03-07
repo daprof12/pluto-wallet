@@ -8,12 +8,13 @@ import AdminLogin from './components/AdminLogin';
 import UnlockWallet from './components/UnlockWallet';
 import TwoFactorAuth from './components/TwoFactorAuth';
 import PWAInstallPrompt from './components/PWAInstallPrompt';
+import PrivacyPolicy from './components/PrivacyPolicy';
 import { initializeAssetConfig } from './utils/assetConfig';
 import { useServiceWorker } from './hooks/useServiceWorker';
 import { storage, storageSync } from './utils/platform';
 import dataService from './utils/dataService';
 
-type View = 'landing' | 'onboarding' | 'wallet' | 'admin' | 'adminLogin' | 'unlock' | '2fa-setup' | '2fa-auth' | 'import-auth';
+type View = 'landing' | 'onboarding' | 'wallet' | 'admin' | 'adminLogin' | 'unlock' | '2fa-setup' | '2fa-auth' | 'import-auth' | 'privacy';
 
 export default function App() {
   const [view, setView] = useState<View>(() => {
@@ -292,6 +293,14 @@ export default function App() {
           onLogoClick={handleLogoClick}
           darkMode={darkMode}
           onToggleDarkMode={toggleDarkMode}
+          onPrivacyClick={() => setView('privacy')}
+        />
+      )}
+
+      {view === 'privacy' && (
+        <PrivacyPolicy
+          onBack={() => setView('landing')}
+          darkMode={darkMode}
         />
       )}
 
