@@ -19,6 +19,11 @@ type View = 'landing' | 'onboarding' | 'wallet' | 'admin' | 'adminLogin' | 'unlo
 export default function App() {
   const [view, setView] = useState<View>(() => {
     try {
+      // Check for direct URL navigation
+      if (typeof window !== 'undefined' && window.location.pathname === '/privacy') {
+        return 'privacy';
+      }
+
       // Initialize view based on session state
       const savedView = sessionStorage.getItem('pluto_current_view') as View | null;
       const existingWallet = storageSync.get('pluto_wallet');
@@ -90,6 +95,15 @@ export default function App() {
   // Persist current view to sessionStorage whenever it changes
   useEffect(() => {
     sessionStorage.setItem('pluto_current_view', view);
+
+    // Sync browser URL
+    if (typeof window !== 'undefined') {
+      if (view === 'privacy') {
+        window.history.replaceState({ view: 'privacy' }, '', '/privacy');
+      } else {
+        window.history.replaceState({ view }, '', '/');
+      }
+    }
   }, [view]);
 
   // Initialize PWA service worker
