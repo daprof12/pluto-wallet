@@ -27,6 +27,18 @@ const DEFAULT_COINGECKO_IDS: { [symbol: string]: string } = {
   SOL: 'solana',
   BNB: 'binancecoin',
   USDT: 'tether',
+  USDT_ERC20: 'tether',
+  USDT_BEP20: 'tether',
+  USDC: 'usd-coin',
+  XRP: 'ripple',
+  ADA: 'cardano',
+  DOGE: 'dogecoin',
+  TRX: 'tron',
+  AVAX: 'avalanche-2',
+  MATIC: 'matic-network',
+  LINK: 'chainlink',
+  TON: 'the-open-network',
+  SHIB: 'shiba-inu'
 };
 
 /**
@@ -142,11 +154,23 @@ export async function fetchCryptoPrices(symbols: string[]): Promise<PriceData> {
  */
 function getFallbackPrices(symbols: string[]): PriceData {
   const fallbackData: PriceData = {
-    BTC: { usd: 45230.50, usd_24h_change: 2.4 },
-    ETH: { usd: 3420.75, usd_24h_change: -1.2 },
-    SOL: { usd: 98.32, usd_24h_change: 5.8 },
-    BNB: { usd: 315.60, usd_24h_change: 3.1 },
-    USDT: { usd: 1.00, usd_24h_change: 0.0 }
+    BTC: { usd: 80999.00, usd_24h_change: 4.5 },
+    ETH: { usd: 2625.74, usd_24h_change: 5.7 },
+    SOL: { usd: 111.83, usd_24h_change: 6.0 },
+    BNB: { usd: 762.69, usd_24h_change: 1.2 },
+    USDT: { usd: 1.00, usd_24h_change: 0.0 },
+    USDT_ERC20: { usd: 1.00, usd_24h_change: 0.0 },
+    USDT_BEP20: { usd: 1.00, usd_24h_change: 0.0 },
+    USDC: { usd: 1.00, usd_24h_change: 0.0 },
+    XRP: { usd: 0.58, usd_24h_change: 2.1 },
+    ADA: { usd: 0.35, usd_24h_change: 1.4 },
+    DOGE: { usd: 0.11, usd_24h_change: 3.8 },
+    TRX: { usd: 0.15, usd_24h_change: 0.8 },
+    AVAX: { usd: 28.40, usd_24h_change: 4.2 },
+    MATIC: { usd: 0.39, usd_24h_change: 1.9 },
+    LINK: { usd: 11.25, usd_24h_change: 2.7 },
+    TON: { usd: 5.62, usd_24h_change: 3.1 },
+    SHIB: { usd: 0.000014, usd_24h_change: 2.2 }
   };
 
   const result: PriceData = {};

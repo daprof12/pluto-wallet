@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { Moon, Sun, LogOut, ShieldCheck, UserCheck, ArrowLeft } from 'lucide-react';
 import LandingPage from './components/LandingPage';
 import WalletOnboarding from './components/WalletOnboarding';
 import WalletDashboard from './components/WalletDashboard';
@@ -20,8 +20,14 @@ export default function App() {
   const [view, setView] = useState<View>(() => {
     try {
       // Check for direct URL navigation
-      if (typeof window !== 'undefined' && window.location.pathname === '/privacy') {
-        return 'privacy';
+      if (typeof window !== 'undefined') {
+        if (window.location.pathname === '/privacy') {
+          return 'privacy';
+        }
+        if (window.location.pathname === '/admin' || window.location.pathname === '/admin/login') {
+          const activeAdminSession = storageSync.get('pluto_admin_session');
+          return activeAdminSession ? 'admin' : 'adminLogin';
+        }
       }
 
       // Initialize view based on session state
@@ -90,7 +96,11 @@ export default function App() {
     // Initialize unlock state from session
     return sessionStorage.getItem('pluto_session_active') === 'true';
   });
+  const [isImpersonatingUser, setIsImpersonatingUser] = useState<boolean>(() => {
+    return sessionStorage.getItem('pluto_impersonating_user') === 'true';
+  });
   const [importWalletData, setImportWalletData] = useState<any>(null); // Temporary storage for import authentication
+  const [isInitializing, setIsInitializing] = useState<boolean>(true);
 
   // Persist current view to sessionStorage whenever it changes
   useEffect(() => {
@@ -109,28 +119,79 @@ export default function App() {
   // Initialize PWA service worker
   const { isSupported: swSupported, isRegistered: swRegistered } = useServiceWorker();
 
-  // Initialize asset configuration and sync with Supabase on app load
+  // Cloud-First Initialization: Sync with Supabase on app load
   useEffect(() => {
+    let isMounted = true;
     initializeAssetConfig();
 
-    // Sync data with Supabase cloud on app start
-    dataService.syncAllFromCloud().then(() => {
-      console.log('☁️ Supabase cloud sync complete');
-      // Re-read wallet data after cloud sync in case it was updated
-      const synced = storageSync.get('pluto_wallet');
-      if (synced && JSON.stringify(synced) !== JSON.stringify(walletData)) {
-        setWalletData(synced);
+    async function initializeCloud() {
+      try {
+        console.log('☁️ Connecting and syncing with Supabase database...');
+        // Max 3.5s timeout so app never blocks indefinitely
+        await Promise.race([
+          dataService.initCloudSync(),
+          new Promise(resolve => setTimeout(resolve, 3500))
+        ]);
+        console.log('✅ Supabase cloud sync complete');
+      } catch (err) {
+        console.warn('⚠️ Cloud sync initialization warning:', err);
       }
-    }).catch(err => {
-      console.warn('☁️ Cloud sync skipped (offline or not configured):', err);
-    });
 
-    // Push existing local data to cloud (first-time migration)
-    dataService.pushAllToCloud().then(result => {
-      if (result.count > 0) {
-        console.log(`☁️ Pushed ${result.count} items to Supabase`);
+      if (!isMounted) return;
+
+      // Update wallet data from synced cloud state
+      const syncedWallet = storageSync.get('pluto_wallet');
+      if (syncedWallet) {
+        setWalletData(syncedWallet);
       }
-    });
+
+      const activeWalletSession = sessionStorage.getItem('pluto_session_active');
+      const activeAdminSession = storageSync.get('pluto_admin_session');
+      const savedView = sessionStorage.getItem('pluto_current_view') as View | null;
+
+      // Direct URL navigation check
+      if (typeof window !== 'undefined') {
+        if (window.location.pathname === '/privacy') {
+          setView('privacy');
+          setIsInitializing(false);
+          return;
+        }
+        if (window.location.pathname === '/admin' || window.location.pathname === '/admin/login') {
+          setView(activeAdminSession ? 'admin' : 'adminLogin');
+          setIsInitializing(false);
+          return;
+        }
+      }
+
+      // Restore view according to synced cloud data
+      if (savedView === 'admin' && activeAdminSession) {
+        setView('admin');
+      } else if (savedView === 'adminLogin') {
+        setView('adminLogin');
+      } else if (savedView === 'wallet' && syncedWallet && activeWalletSession === 'true') {
+        setView('wallet');
+      } else if (savedView === 'unlock' && syncedWallet) {
+        setView('unlock');
+      } else if (savedView === 'landing') {
+        setView('landing');
+      } else if (savedView === 'onboarding') {
+        setView('onboarding');
+      } else if (syncedWallet && activeWalletSession === 'true') {
+        setView('wallet');
+      } else if (syncedWallet) {
+        setView('unlock');
+      } else {
+        setView('landing');
+      }
+
+      setIsInitializing(false);
+    }
+
+    initializeCloud();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Log PWA status
@@ -150,18 +211,13 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
-    // Load wallet from storage
-    storage.get('pluto_wallet').then((existingWallet) => {
-      if (existingWallet) {
-        setWalletData(existingWallet);
-      }
-    });
-
     // Listen for storage changes (when admin updates balance from different tab)
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === 'pluto_wallet' && e.newValue) {
-        const updatedWallet = JSON.parse(e.newValue);
-        setWalletData(updatedWallet);
+        try {
+          const updatedWallet = JSON.parse(e.newValue);
+          setWalletData(updatedWallet);
+        } catch {}
       }
     };
 
@@ -172,12 +228,21 @@ export default function App() {
       }
     }) as EventListener;
 
+    // Listen for generic Supabase Realtime sync updates
+    const handlePlutoDataUpdated = ((e: CustomEvent) => {
+      if (e.detail && e.detail.key === 'pluto_wallet' && e.detail.value) {
+        setWalletData(e.detail.value);
+      }
+    }) as EventListener;
+
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('walletDataUpdated', handleCustomWalletUpdate);
+    window.addEventListener('pluto_data_updated', handlePlutoDataUpdated);
 
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('walletDataUpdated', handleCustomWalletUpdate);
+      window.removeEventListener('pluto_data_updated', handlePlutoDataUpdated);
     };
   }, []);
 
@@ -271,7 +336,60 @@ export default function App() {
   const handleAdminLogout = () => {
     // Clear admin session
     storage.remove('pluto_admin_session');
+    setIsImpersonatingUser(false);
+    sessionStorage.removeItem('pluto_impersonating_user');
     setView('adminLogin');
+  };
+
+  const handleAdminLoginAsUser = (user: any) => {
+    // Construct valid walletData structure for WalletDashboard
+    const userWalletData = {
+      id: user.id,
+      email: user.email,
+      phone: user.phone || '',
+      fullName: user.fullName || user.email?.split('@')[0] || 'User',
+      mnemonic_encrypted: user.mnemonic_encrypted || btoa('apple banana cherry dog elephant fox grape horse igloo jaguar kangaroo lemon'),
+      password: user.password || btoa('User@123'),
+      passwordLastChanged: user.passwordLastChanged || user.created_at,
+      addresses: user.addresses || {
+        BTC: 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq',
+        ETH: '0x71C7656EC7ab88b098defB751B7401B5f6d8976F',
+        SOL: '7YpJ5x9nE4kBYmJmGKZhCvXBAPngXzFqPmgvT8KJnKvH',
+        BNB: 'bnb136ns6lfw4zs5hg4n85vdthaad7hq5m4gtkgf23',
+        USDT: 'TJDENsfBJs4RFETt1X1W8wMDc8M5XnJhCe'
+      },
+      balances: user.balances || { BTC: '0', ETH: '0', SOL: '0', BNB: '0', USDT: '0.00' },
+      transactions: user.transactions || [],
+      twoFactorAuth: user.twoFactorAuth || {
+        enabled: false,
+        preferredMethod: null,
+        passcode: null,
+        biometricEnabled: false,
+        biometricData: null,
+        setupDate: null
+      },
+      failedLoginAttempts: user.failedLoginAttempts || 0,
+      accountLocked: user.accountLocked || false,
+      kyc_status: user.kyc_status || 'pending',
+      kyc_data: user.kyc_data || null,
+      blocked: user.blocked || false,
+      created_at: user.created_at || new Date().toISOString(),
+      last_login: new Date().toISOString()
+    };
+
+    setWalletData(userWalletData);
+    storage.set('pluto_wallet', userWalletData);
+    setIsWalletUnlocked(true);
+    sessionStorage.setItem('pluto_session_active', 'true');
+    setIsImpersonatingUser(true);
+    sessionStorage.setItem('pluto_impersonating_user', 'true');
+    setView('wallet');
+  };
+
+  const handleExitImpersonation = () => {
+    setIsImpersonatingUser(false);
+    sessionStorage.removeItem('pluto_impersonating_user');
+    setView('admin');
   };
 
   const handleViewWallet = () => {
@@ -295,6 +413,22 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 transition-colors duration-200">
+      {isInitializing && (
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-gray-950 text-white">
+          <div className="relative mb-6">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-purple-600 via-pink-600 to-orange-500 flex items-center justify-center shadow-lg shadow-purple-500/30 animate-pulse">
+              <ShieldCheck className="w-8 h-8 text-white" />
+            </div>
+            <div className="absolute -inset-1 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-600 opacity-40 blur-lg animate-pulse" />
+          </div>
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-ping" />
+            <h2 className="text-xl font-bold tracking-wide">Pluto Wallet</h2>
+          </div>
+          <p className="text-sm text-gray-400">Syncing with database...</p>
+        </div>
+      )}
+
       {view === 'landing' && (
         <LandingPage
           onGetStarted={() => setView('onboarding')}
@@ -369,15 +503,42 @@ export default function App() {
       )}
 
       {view === 'wallet' && walletData && (
-        <WalletDashboard
-          walletData={walletData}
-          onLock={handleLockWallet}
-          onUpdateWallet={handleUpdateWallet}
-          onAssetOverviewChange={setShowingAssetOverview}
-          darkMode={darkMode}
-          onToggleDarkMode={toggleDarkMode}
-          onLogoClick={handleLogoClick}
-        />
+        <div className="relative min-h-screen">
+          {isImpersonatingUser && (
+            <div className="sticky top-0 z-50 bg-gradient-to-r from-purple-700 via-indigo-700 to-purple-800 text-white px-4 py-2.5 shadow-lg border-b border-purple-500/40 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="flex h-2.5 w-2.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-400"></span>
+                </span>
+                <p className="text-xs sm:text-sm font-medium flex items-center gap-2">
+                  <span className="font-bold uppercase tracking-wider text-amber-300 text-[10px] px-2 py-0.5 rounded-full bg-amber-950/60 border border-amber-500/40">
+                    Admin
+                  </span>
+                  <span>
+                    Logged in as <strong className="text-white underline underline-offset-2">{walletData.email}</strong>
+                  </span>
+                </p>
+              </div>
+              <button
+                onClick={handleExitImpersonation}
+                className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 active:scale-95 text-white text-xs font-semibold px-3 py-1.5 rounded-lg border border-white/30 transition-all shadow-sm cursor-pointer"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Return to Admin</span>
+              </button>
+            </div>
+          )}
+          <WalletDashboard
+            walletData={walletData}
+            onLock={handleLockWallet}
+            onUpdateWallet={handleUpdateWallet}
+            onAssetOverviewChange={setShowingAssetOverview}
+            darkMode={darkMode}
+            onToggleDarkMode={toggleDarkMode}
+            onLogoClick={handleLogoClick}
+          />
+        </div>
       )}
 
       {view === 'adminLogin' && (
@@ -393,6 +554,7 @@ export default function App() {
           onBack={handleAdminLogout}
           darkMode={darkMode}
           onToggleDarkMode={toggleDarkMode}
+          onLoginAsUser={handleAdminLoginAsUser}
         />
       )}
 

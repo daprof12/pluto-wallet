@@ -23,6 +23,11 @@ interface EditFeeModalProps {
   };
   onSave: (updatedFee: any) => void;
   onClose: () => void;
+  targetUser?: {
+    id: string;
+    fullName?: string;
+    email: string;
+  } | null;
 }
 
 export default function EditFeeModal({
@@ -32,7 +37,8 @@ export default function EditFeeModal({
   assetColor,
   feeData,
   onSave,
-  onClose
+  onClose,
+  targetUser
 }: EditFeeModalProps) {
   const assetConfig = loadAssetConfig();
   const assetInfo = assetConfig.find(a => a.symbol === asset);
@@ -165,7 +171,18 @@ export default function EditFeeModal({
               )}
               <div>
                 <h2 className="text-xl text-gray-900 dark:text-white">Edit Fee Settings</h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400">{assetName} ({asset})</p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{assetName} ({asset})</p>
+                  {targetUser ? (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                      User: {targetUser.fullName || targetUser.email}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
+                      Global Platform Default
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
             <button

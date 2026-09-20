@@ -46,13 +46,16 @@ export const isAndroid = (() => {
 
 export const isWeb = !isNative;
 
+import dataService from './dataService';
+
 /**
  * Cross-platform storage wrapper
- * Automatically uses localStorage on web and Capacitor Preferences on native
+ * Automatically uses localStorage on web and Capacitor Preferences on native,
+ * and seamlessly synchronizes all writes to Supabase database via dataService.
  */
 export const storage = {
   /**
-   * Store a value (automatically handles JSON serialization)
+   * Store a value (automatically handles JSON serialization and cloud sync)
    * @param key Storage key
    * @param value Value to store (will be JSON stringified)
    */
@@ -64,13 +67,11 @@ export const storage = {
         const prefs = getPreferences();
         if (prefs) {
           await prefs.set({ key, value: stringValue });
-        } else {
-          // Fallback to localStorage if Capacitor not available
-          localStorage.setItem(key, stringValue);
         }
-      } else {
-        localStorage.setItem(key, stringValue);
       }
+      
+      // Always sync to dataService (updates cache, localStorage, and Supabase)
+      dataService.setItem(key, stringValue);
     } catch (error) {
       console.error(`Error storing ${key}:`, error);
       throw error;
@@ -91,12 +92,11 @@ export const storage = {
         if (prefs) {
           const result = await prefs.get({ key });
           stringValue = result.value;
-        } else {
-          // Fallback to localStorage if Capacitor not available
-          stringValue = localStorage.getItem(key);
         }
-      } else {
-        stringValue = localStorage.getItem(key);
+      }
+
+      if (!stringValue) {
+        stringValue = await dataService.getItemAsync(key);
       }
 
       return stringValue ? JSON.parse(stringValue) : null;
@@ -116,12 +116,9 @@ export const storage = {
         const prefs = getPreferences();
         if (prefs) {
           await prefs.remove({ key });
-        } else {
-          localStorage.removeItem(key);
         }
-      } else {
-        localStorage.removeItem(key);
       }
+      dataService.removeItem(key);
     } catch (error) {
       console.error(`Error removing ${key}:`, error);
       throw error;
@@ -137,10 +134,9 @@ export const storage = {
         const prefs = getPreferences();
         if (prefs) {
           await prefs.clear();
-        } else {
-          localStorage.clear();
         }
-      } else {
+      }
+      if (typeof localStorage !== 'undefined') {
         localStorage.clear();
       }
     } catch (error) {
@@ -159,12 +155,9 @@ export const storage = {
         if (prefs) {
           const result = await prefs.keys();
           return result.keys || [];
-        } else {
-          return Object.keys(localStorage);
         }
-      } else {
-        return Object.keys(localStorage);
       }
+      return typeof localStorage !== 'undefined' ? Object.keys(localStorage) : [];
     } catch (error) {
       console.error('Error getting keys:', error);
       return [];
@@ -174,17 +167,13 @@ export const storage = {
 
 /**
  * Synchronous storage helper for initialization
- * Use only for initial state - prefer async storage.get() in effects
+ * Uses dataService in-memory cache and localStorage
  */
 export const storageSync = {
   get(key: string): any {
     try {
-      if (isWeb) {
-        const value = localStorage.getItem(key);
-        return value ? JSON.parse(value) : null;
-      }
-      // For native, return null and use async storage in useEffect
-      return null;
+      const value = dataService.getItem(key);
+      return value ? JSON.parse(value) : null;
     } catch (error) {
       return null;
     }

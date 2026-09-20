@@ -1,4 +1,4 @@
-import { Chrome, Download, ArrowRight, LogOut, ChevronDown, Moon, Sun } from 'lucide-react';
+import { Chrome, Download, ArrowRight, LogOut, ChevronDown, Moon, Sun, Shield } from 'lucide-react';
 import { Button } from './ui/button';
 import Logo from './Logo';
 import { useState, useRef, useEffect } from 'react';
@@ -166,8 +166,9 @@ export default function LandingPage({
               </button>
               <button
                 onClick={onAdminAccess}
-                className="hidden px-4 py-2 rounded-lg text-sm font-semibold text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white transition-colors"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-gray-700 hover:text-purple-600 dark:text-gray-300 dark:hover:text-purple-400 border border-gray-200 dark:border-gray-700 hover:border-purple-300 dark:hover:border-purple-700 hover:bg-purple-50/50 dark:hover:bg-purple-950/20 transition-all flex items-center gap-1.5 cursor-pointer"
               >
+                <Shield className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
                 Admin
               </button>
 

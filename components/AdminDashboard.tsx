@@ -1,6 +1,6 @@
 import dataService from '../utils/dataService';
 import { useState, useEffect } from 'react';
-import { Users, DollarSign, Settings, FileText, ArrowLeft, Shield, Search, MoreVertical, Edit, Edit2, Trash, Lock, Unlock, Eye, EyeOff, Activity, Coins, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownLeft, RefreshCw, Check, Copy, Headphones, MessageCircle, Send, Phone, Mail, Clock, AlertCircle, CheckCircle, XCircle, User, LogOut, KeyRound, Moon, Sun, Database } from 'lucide-react';
+import { Users, DollarSign, Settings, FileText, ArrowLeft, Shield, Search, MoreVertical, Edit, Edit2, Trash, Lock, Unlock, Eye, EyeOff, Activity, Coins, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownLeft, RefreshCw, Check, Copy, Headphones, MessageCircle, Send, Phone, Mail, Clock, AlertCircle, CheckCircle, XCircle, User, LogOut, KeyRound, Moon, Sun, Database, LogIn, ShieldCheck } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
@@ -20,21 +20,30 @@ import { generateAllAddresses, generateAddressForCoin } from '../utils/addressGe
 import { validateAddress } from '../utils/addressValidation';
 import { copyToClipboard } from '../utils/clipboard';
 import EditFeeModal from './admin/EditFeeModal';
+import ReviewKycModal, { KycData } from './admin/ReviewKycModal';
 import { loadAssetConfig, saveAssetConfig, AssetConfig } from '../utils/assetConfig';
 import { fetchCryptoPrices } from '../utils/priceService';
 import { formatDecimal, formatPercentage, formatBalance } from '../utils/formatNumber';
 import MigrationPanel from './MigrationPanel';
+import { Switch } from './ui/switch';
+import AdminMessagesTab from './admin/AdminMessagesTab';
+import { feeService, UserFeeOverride } from '../utils/feeService';
 
 interface AdminDashboardProps {
   onBack: () => void;
   darkMode?: boolean;
   onToggleDarkMode?: () => void;
+  onLoginAsUser?: (user: any) => void;
 }
 
-export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkMode }: AdminDashboardProps) {
+export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkMode, onLoginAsUser }: AdminDashboardProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [showUserDetails, setShowUserDetails] = useState(false);
+  const [showReviewKyc, setShowReviewKyc] = useState(false);
+  const [kycUserToReview, setKycUserToReview] = useState<any>(null);
+  const [customMessageEnabled, setCustomMessageEnabled] = useState(false);
+  const [customMessageText, setCustomMessageText] = useState('We are currently experiencing high transaction traffic, please try again later');
   const [showEditBalance, setShowEditBalance] = useState(false);
   const [showUserActivities, setShowUserActivities] = useState(false);
   const [showTransactionReceipt, setShowTransactionReceipt] = useState(false);
@@ -163,15 +172,73 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const loadUsers = () => {
     const storedUsers = dataService.getItem('pluto_admin_users');
     if (storedUsers) {
-      return JSON.parse(storedUsers);
+      try {
+        const parsed = JSON.parse(storedUsers);
+        return parsed.map((u: any) => {
+          if (!u.kyc_data) {
+            return {
+              ...u,
+              kyc_data: {
+                fullName: u.fullName || u.email?.split('@')[0] || 'User',
+                dateOfBirth: '1993-05-12',
+                nationality: 'United States',
+                residentialAddress: {
+                  street: '100 Main Street',
+                  city: 'San Francisco',
+                  state: 'CA',
+                  postalCode: '94105',
+                  country: 'United States'
+                },
+                document: {
+                  id: 'doc_' + u.id,
+                  type: 'passport',
+                  documentNumber: 'P' + (u.id?.replace(/\D/g, '') || '92847291'),
+                  issuingCountry: 'United States',
+                  expiryDate: '2029-12-31'
+                },
+                submittedAt: u.created_at || new Date().toISOString(),
+                adminNotes: u.kyc_status === 'verified' ? 'Verified by admin' : undefined,
+                rejectionReason: u.kyc_status === 'rejected' ? 'ID document expired' : undefined
+              }
+            };
+          }
+          return u;
+        });
+      } catch (e) {
+        console.error('Error parsing stored users', e);
+      }
     }
     // Default mock users if no stored data
     return [
       {
         id: 'usr_001',
         email: 'john@example.com',
+        fullName: 'Johnathan Doe',
         phone: '+1234567890',
         kyc_status: 'verified',
+        kyc_data: {
+          fullName: 'Johnathan Doe',
+          dateOfBirth: '1989-03-15',
+          nationality: 'United States',
+          residentialAddress: {
+            street: '120 Wall Street, Apt 14B',
+            city: 'New York',
+            state: 'NY',
+            postalCode: '10005',
+            country: 'United States'
+          },
+          document: {
+            id: 'doc_usr_001',
+            type: 'passport',
+            documentNumber: 'USA84920194',
+            issuingCountry: 'United States',
+            expiryDate: '2030-08-12'
+          },
+          submittedAt: '2025-11-20T10:00:00Z',
+          reviewedAt: '2025-11-21T14:30:00Z',
+          reviewedBy: 'Super Admin',
+          adminNotes: 'All identity documents verified against government sanctions database. Clear selfie match.'
+        },
         created_at: '2025-11-20T10:00:00Z',
         last_login: '2025-11-27T08:30:00Z',
         blocked: false,
@@ -199,8 +266,30 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       {
         id: 'usr_002',
         email: 'sarah@example.com',
+        fullName: 'Sarah Connor',
         phone: '+9876543210',
         kyc_status: 'pending',
+        kyc_data: {
+          fullName: 'Sarah Connor',
+          dateOfBirth: '1992-11-04',
+          nationality: 'Canada',
+          residentialAddress: {
+            street: '450 Bay Street, Suite 800',
+            city: 'Toronto',
+            state: 'ON',
+            postalCode: 'M5H 2V6',
+            country: 'Canada'
+          },
+          document: {
+            id: 'doc_usr_002',
+            type: 'drivers_license',
+            documentNumber: 'DL-ON-9204928',
+            issuingCountry: 'Canada',
+            expiryDate: '2028-11-04'
+          },
+          submittedAt: '2025-11-25T14:20:00Z',
+          adminNotes: 'Awaiting compliance review.'
+        },
         created_at: '2025-11-25T14:20:00Z',
         last_login: '2025-11-27T09:15:00Z',
         blocked: false,
@@ -228,8 +317,32 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       {
         id: 'usr_003',
         email: 'mike@example.com',
+        fullName: 'Michael Vance',
         phone: '+1122334455',
         kyc_status: 'rejected',
+        kyc_data: {
+          fullName: 'Michael Vance',
+          dateOfBirth: '1985-07-22',
+          nationality: 'United Kingdom',
+          residentialAddress: {
+            street: '221B Baker Street',
+            city: 'London',
+            postalCode: 'NW1 6XE',
+            country: 'United Kingdom'
+          },
+          document: {
+            id: 'doc_usr_003',
+            type: 'national_id',
+            documentNumber: 'UK-ID-4920491',
+            issuingCountry: 'United Kingdom',
+            expiryDate: '2024-05-10'
+          },
+          submittedAt: '2025-11-22T11:30:00Z',
+          reviewedAt: '2025-11-23T09:00:00Z',
+          reviewedBy: 'Super Admin',
+          rejectionReason: 'ID document has expired. Please upload a valid government-issued ID.',
+          adminNotes: 'Document expired in May 2024. Requested resubmission.'
+        },
         created_at: '2025-11-22T11:30:00Z',
         last_login: '2025-11-26T16:45:00Z',
         blocked: true,
@@ -259,72 +372,32 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
   const [users, setUsers] = useState(loadUsers());
 
-  // Load fees from localStorage or use defaults
+  // Scope for Fee & Deposit Configuration: 'global' or specific user ID
+  const [selectedFeeUserId, setSelectedFeeUserId] = useState<string>('global');
+  const [userFeeOverrides, setUserFeeOverrides] = useState<Record<string, any>>(() => feeService.getAllUserFeeOverrides());
+
+  // Load fees capturing ALL assets from Assets Overview
   const loadFees = () => {
-    const storedFees = dataService.getItem('pluto_admin_fees');
-    if (storedFees) {
-      return JSON.parse(storedFees);
-    }
-    return {
-      BTC: { 
-        withdraw_fee: '0.0005', 
-        percent: '0.5',
-        deposit_address: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
-        deposit_enabled: true,
-        gas_fee_enabled: true,
-        gas_fee_type: 'fixed',
-        gas_fee_fixed: '0.00001',
-        gas_fee_percent: '0.1'
-      },
-      ETH: { 
-        withdraw_fee: '0.003', 
-        percent: '0.3',
-        deposit_address: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
-        deposit_enabled: true,
-        gas_fee_enabled: true,
-        gas_fee_type: 'fixed',
-        gas_fee_fixed: '0.0015',
-        gas_fee_percent: '0.2'
-      },
-      SOL: { 
-        withdraw_fee: '0.001', 
-        percent: '0.2',
-        deposit_address: 'DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK',
-        deposit_enabled: true,
-        gas_fee_enabled: true,
-        gas_fee_type: 'fixed',
-        gas_fee_fixed: '0.000005',
-        gas_fee_percent: '0.15'
-      },
-      BNB: { 
-        withdraw_fee: '0.002', 
-        percent: '0.25',
-        deposit_address: 'bnb1grpf0955h0ykzq3ar5nmum7y6gdfl6lxfn46h2',
-        deposit_enabled: true,
-        gas_fee_enabled: true,
-        gas_fee_type: 'fixed',
-        gas_fee_fixed: '0.0008',
-        gas_fee_percent: '0.18'
-      },
-      USDT: { 
-        withdraw_fee: '1.0', 
-        percent: '0.1',
-        deposit_address: 'TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9',
-        deposit_enabled: true,
-        gas_fee_enabled: true,
-        gas_fee_type: 'fixed',
-        gas_fee_fixed: '1.5',
-        gas_fee_percent: '0.25'
-      }
-    };
+    return feeService.getGlobalFees();
   };
 
   const [fees, setFees] = useState(loadFees());
 
-  // Persist fees to localStorage whenever they change
+  // Reload fees when scope changes between global and a specific user
   useEffect(() => {
-    dataService.setItem('pluto_admin_fees', JSON.stringify(fees));
-  }, [fees]);
+    if (selectedFeeUserId === 'global') {
+      setFees(feeService.getGlobalFees());
+    } else {
+      setFees(feeService.getEffectiveFees(selectedFeeUserId));
+    }
+  }, [selectedFeeUserId]);
+
+  // Persist global fees whenever they change in global scope
+  useEffect(() => {
+    if (selectedFeeUserId === 'global') {
+      feeService.saveGlobalFees(fees);
+    }
+  }, [fees, selectedFeeUserId]);
 
   // Load user activities from localStorage or use default mock data
   const loadUserActivities = () => {
@@ -493,11 +566,13 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     users.forEach(user => {
       Object.entries(user.balances).forEach(([asset, balance]) => {
         if (totals[asset]) {
-          totals[asset].total += parseFloat(balance as string);
-          if (parseFloat(balance as string) > 0) {
+          const bal = parseFloat(balance as string || '0');
+          totals[asset].total += bal;
+          if (bal > 0) {
             totals[asset].users += 1;
           }
-          totals[asset].value += parseFloat(balance as string) * prices[asset as keyof typeof prices];
+          const price = prices[asset as keyof typeof prices] || (asset.includes('USDT') ? 1.00 : 0);
+          totals[asset].value += bal * price;
         }
       });
     });
@@ -648,7 +723,56 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
   const handleViewDetails = (user: any) => {
     setSelectedUser(user);
+    setCustomMessageEnabled(user.customMessage?.enabled || false);
+    setCustomMessageText(user.customMessage?.message || 'We are currently experiencing high transaction traffic, please try again later');
     setShowUserDetails(true);
+  };
+
+  const handleSaveCustomMessage = () => {
+    if (!selectedUser) return;
+    const updatedCustomMessage = {
+      enabled: customMessageEnabled,
+      message: customMessageText.trim() || 'We are currently experiencing high transaction traffic, please try again later'
+    };
+
+    const updatedUsers = users.map(u => {
+      if (u.id === selectedUser.id) {
+        return {
+          ...u,
+          customMessage: updatedCustomMessage
+        };
+      }
+      return u;
+    });
+
+    setUsers(updatedUsers);
+    dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+    setSelectedUser({
+      ...selectedUser,
+      customMessage: updatedCustomMessage
+    });
+
+    // Also sync to active user wallet if matching
+    const userWallet = dataService.getItem('pluto_wallet');
+    if (userWallet) {
+      try {
+        const parsedWallet = JSON.parse(userWallet);
+        if (parsedWallet.id === selectedUser.id) {
+          const updatedWallet = {
+            ...parsedWallet,
+            customMessage: updatedCustomMessage
+          };
+          dataService.setItem('pluto_wallet', JSON.stringify(updatedWallet));
+          window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+            detail: { walletData: updatedWallet }
+          }));
+        }
+      } catch (e) {
+        console.error('Error syncing custom message to wallet', e);
+      }
+    }
+
+    alert('Custom message updated successfully!');
   };
 
   const handleEditBalance = (user: any) => {
@@ -678,6 +802,116 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       // Persist to localStorage
       dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
     }
+  };
+
+  const handleLoginAsUser = (user: any) => {
+    if (onLoginAsUser) {
+      onLoginAsUser(user);
+    } else {
+      alert(`Logging in as ${user.email}...`);
+    }
+  };
+
+  const handleOpenReviewKyc = (user: any) => {
+    setKycUserToReview(user);
+    setShowReviewKyc(true);
+  };
+
+  const handleUpdateKycStatus = (
+    userId: string, 
+    newStatus: 'verified' | 'pending' | 'rejected', 
+    kycUpdate: any
+  ) => {
+    const updatedUsers = users.map(u => {
+      if (u.id === userId) {
+        return {
+          ...u,
+          kyc_status: newStatus,
+          kyc_data: {
+            ...(u.kyc_data || {}),
+            ...kycUpdate
+          }
+        };
+      }
+      return u;
+    });
+
+    setUsers(updatedUsers);
+    dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+
+    // Also update selectedUser if user details modal is open
+    if (selectedUser && selectedUser.id === userId) {
+      setSelectedUser({
+        ...selectedUser,
+        kyc_status: newStatus,
+        kyc_data: {
+          ...(selectedUser.kyc_data || {}),
+          ...kycUpdate
+        }
+      });
+    }
+
+    // Sync to user wallet if currently loaded
+    const userWallet = dataService.getItem('pluto_wallet');
+    if (userWallet) {
+      try {
+        const parsedWallet = JSON.parse(userWallet);
+        if (parsedWallet.id === userId) {
+          const updatedWallet = {
+            ...parsedWallet,
+            kyc_status: newStatus,
+            kyc_data: {
+              ...(parsedWallet.kyc_data || {}),
+              ...kycUpdate
+            }
+          };
+          dataService.setItem('pluto_wallet', JSON.stringify(updatedWallet));
+          window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+            detail: { walletData: updatedWallet }
+          }));
+        }
+      } catch (err) {
+        console.error('Failed to sync wallet data for KYC update', err);
+      }
+    }
+
+    // Add activity log
+    const userActivities = JSON.parse(dataService.getItem('pluto_user_activities') || '{}');
+    if (!userActivities[userId]) {
+      userActivities[userId] = [];
+    }
+    const kycActivity = {
+      id: `act_${Date.now()}`,
+      type: 'kyc_review',
+      title: `KYC Status: ${newStatus.toUpperCase()}`,
+      description: newStatus === 'verified'
+        ? 'Identity verification approved by compliance officer.'
+        : newStatus === 'rejected'
+        ? `Identity verification rejected: ${kycUpdate.rejectionReason || 'Documents did not meet criteria'}`
+        : 'KYC marked for resubmission.',
+      timestamp: new Date().toISOString(),
+      status: newStatus
+    };
+    userActivities[userId].unshift(kycActivity);
+    dataService.setItem('pluto_user_activities', JSON.stringify(userActivities));
+
+    // Send in-app notification to user
+    const userNotifications = JSON.parse(dataService.getItem(`pluto_notifications_${userId}`) || '[]');
+    const notification = {
+      id: `notif_${Date.now()}`,
+      title: newStatus === 'verified' ? '✅ KYC Verification Approved' : newStatus === 'rejected' ? '❌ KYC Verification Rejected' : '⚠️ KYC Action Required',
+      message: newStatus === 'verified'
+        ? 'Congratulations! Your identity documents have been approved. Full account limits unlocked.'
+        : newStatus === 'rejected'
+        ? `Your identity verification was rejected. Reason: ${kycUpdate.rejectionReason || 'Please resubmit your documents.'}`
+        : 'Please update and resubmit your KYC documents for compliance review.',
+      timestamp: new Date().toISOString(),
+      read: false,
+      type: 'system'
+    };
+    userNotifications.unshift(notification);
+    dataService.setItem(`pluto_notifications_${userId}`, JSON.stringify(userNotifications));
+    window.dispatchEvent(new CustomEvent('notificationsUpdated'));
   };
 
   const handleAddressChange = (asset: string, value: string) => {
@@ -1082,32 +1316,114 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   };
 
   const handleEditFee = (asset: string) => {
-    setEditingFee({ asset, data: fees[asset] });
+    setEditingFee({ asset, data: fees[asset] || feeService.getDefaultFeeForAsset(asset) });
   };
 
   const handleSaveFee = (asset: string, updatedFee: any) => {
-    // Update fees state
-    const updatedFees = {
-      ...fees,
-      [asset]: updatedFee
+    if (selectedFeeUserId === 'global') {
+      const updatedFees = {
+        ...fees,
+        [asset]: updatedFee
+      };
+      setFees(updatedFees);
+      feeService.saveGlobalFees(updatedFees);
+
+      const activity = {
+        id: auditLogs.length + 1,
+        admin: 'admin@pluto.io',
+        action: 'Fee Update',
+        details: `Updated global ${asset} withdrawal fee and deposit settings`,
+        timestamp: new Date().toISOString(),
+        ip: '192.168.1.1'
+      };
+      setAuditLogs([activity, ...auditLogs]);
+      setEditingFee(null);
+      alert(`Global ${asset} fee settings updated successfully!`);
+    } else {
+      const targetUser = users.find(u => u.id === selectedFeeUserId);
+      const currentOverride = feeService.getUserFeeOverride(selectedFeeUserId);
+      const existingUserFees = currentOverride?.fees || {};
+      const updatedUserFees = {
+        ...existingUserFees,
+        [asset]: updatedFee
+      };
+      const newOverride: UserFeeOverride = {
+        userId: selectedFeeUserId,
+        userEmail: targetUser?.email,
+        userName: targetUser?.fullName,
+        enabled: true,
+        fees: updatedUserFees,
+        updatedAt: new Date().toISOString()
+      };
+      feeService.saveUserFeeOverride(newOverride);
+      setUserFeeOverrides(feeService.getAllUserFeeOverrides());
+      setFees(feeService.getEffectiveFees(selectedFeeUserId));
+
+      const activity = {
+        id: auditLogs.length + 1,
+        admin: 'admin@pluto.io',
+        action: 'User Fee Override',
+        details: `Updated custom ${asset} fee and deposit settings for user ${targetUser?.email || selectedFeeUserId}`,
+        timestamp: new Date().toISOString(),
+        ip: '192.168.1.1'
+      };
+      setAuditLogs([activity, ...auditLogs]);
+      setEditingFee(null);
+      alert(`Custom ${asset} fee settings updated for ${targetUser?.fullName || targetUser?.email || selectedFeeUserId}!`);
+    }
+  };
+
+  const handleToggleUserCustomFees = (enabled: boolean) => {
+    if (selectedFeeUserId === 'global') return;
+    const targetUser = users.find(u => u.id === selectedFeeUserId);
+    const currentOverride = feeService.getUserFeeOverride(selectedFeeUserId);
+    if (!currentOverride) {
+      const newOverride: UserFeeOverride = {
+        userId: selectedFeeUserId,
+        userEmail: targetUser?.email,
+        userName: targetUser?.fullName,
+        enabled,
+        fees: { ...fees },
+        updatedAt: new Date().toISOString()
+      };
+      feeService.saveUserFeeOverride(newOverride);
+    } else {
+      feeService.saveUserFeeOverride({
+        ...currentOverride,
+        enabled,
+        updatedAt: new Date().toISOString()
+      });
+    }
+    setUserFeeOverrides(feeService.getAllUserFeeOverrides());
+    setFees(feeService.getEffectiveFees(selectedFeeUserId));
+  };
+
+  const handleResetUserCustomFees = () => {
+    if (selectedFeeUserId === 'global') return;
+    const targetUser = users.find(u => u.id === selectedFeeUserId);
+    if (confirm(`Revert ${targetUser?.fullName || targetUser?.email || 'this user'} back to global platform fee & deposit defaults?`)) {
+      feeService.deleteUserFeeOverride(selectedFeeUserId);
+      setUserFeeOverrides(feeService.getAllUserFeeOverrides());
+      setFees(feeService.getGlobalFees());
+    }
+  };
+
+  const handleCloneGlobalFeesToUser = () => {
+    if (selectedFeeUserId === 'global') return;
+    const targetUser = users.find(u => u.id === selectedFeeUserId);
+    const globalFees = feeService.getGlobalFees();
+    const newOverride: UserFeeOverride = {
+      userId: selectedFeeUserId,
+      userEmail: targetUser?.email,
+      userName: targetUser?.fullName,
+      enabled: true,
+      fees: { ...globalFees },
+      updatedAt: new Date().toISOString()
     };
-    setFees(updatedFees);
-
-    // Log activity
-    const activity = {
-      id: auditLogs.length + 1,
-      admin: 'admin@pluto.io',
-      action: 'Fee Update',
-      details: `Updated ${asset} withdrawal fee and deposit settings`,
-      timestamp: new Date().toISOString(),
-      ip: '192.168.1.1'
-    };
-    setAuditLogs([activity, ...auditLogs]);
-
-    // Close modal
-    setEditingFee(null);
-
-    alert(`${asset} fee settings updated successfully!`);
+    feeService.saveUserFeeOverride(newOverride);
+    setUserFeeOverrides(feeService.getAllUserFeeOverrides());
+    setFees(feeService.getEffectiveFees(selectedFeeUserId));
+    alert(`Cloned all global fee & deposit defaults into ${targetUser?.fullName || targetUser?.email}'s custom settings!`);
   };
 
   const handleChangePassword = () => {
@@ -1172,6 +1488,17 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       logoUrl: coin.logoUrl || ''
     });
     setShowCoinModal(true);
+  };
+
+  const handleToggleAssetShown = (symbol: string, enabled: boolean) => {
+    const updated = assetConfig.map(a => {
+      if (a.symbol === symbol) {
+        return { ...a, enabled };
+      }
+      return a;
+    });
+    setAssetConfig(updated);
+    saveAssetConfig(updated);
   };
 
   const handleDeleteCoin = (symbol: string) => {
@@ -1606,6 +1933,9 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                   Support Tickets
                   {tickets.filter(t => t.status === 'open').length > 0 && ` (${tickets.filter(t => t.status === 'open').length})`}
                 </SelectItem>
+                <SelectItem value="messages">
+                  Messages & Mail
+                </SelectItem>
                 <SelectItem value="chat">
                   Live Chat
                   {chats.reduce((sum, c) => sum + c.unread_count, 0) > 0 && ` (${chats.reduce((sum, c) => sum + c.unread_count, 0)})`}
@@ -1629,6 +1959,12 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                     {tickets.filter(t => t.status === 'open').length}
                   </Badge>
                 )}
+              </div>
+            </TabsTrigger>
+            <TabsTrigger value="messages">
+              <div className="flex items-center gap-2">
+                <Mail className="w-4 h-4" />
+                Messages & Mail
               </div>
             </TabsTrigger>
             <TabsTrigger value="chat">
@@ -1695,17 +2031,28 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                           ${totalBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </TableCell>
                         <TableCell>
-                          <Badge
-                            variant={
-                              user.kyc_status === 'verified'
-                                ? 'default'
-                                : user.kyc_status === 'pending'
-                                ? 'secondary'
-                                : 'destructive'
-                            }
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReviewKyc(user)}
+                            className="group flex items-center gap-1.5 focus:outline-none cursor-pointer"
+                            title="Click to review user KYC"
                           >
-                            {user.kyc_status}
-                          </Badge>
+                            <Badge
+                              variant={
+                                user.kyc_status === 'verified'
+                                  ? 'default'
+                                  : user.kyc_status === 'pending'
+                                  ? 'secondary'
+                                  : 'destructive'
+                              }
+                              className="capitalize flex items-center gap-1 group-hover:ring-2 group-hover:ring-purple-400 dark:group-hover:ring-purple-600 transition-all"
+                            >
+                              {user.kyc_status === 'verified' && <CheckCircle className="w-3 h-3 text-emerald-400" />}
+                              {user.kyc_status === 'pending' && <Clock className="w-3 h-3 text-amber-500 animate-pulse" />}
+                              {user.kyc_status === 'rejected' && <XCircle className="w-3 h-3 text-red-400" />}
+                              {user.kyc_status}
+                            </Badge>
+                          </button>
                         </TableCell>
                         <TableCell className="text-sm">
                           {new Date(user.created_at).toLocaleDateString()}
@@ -1722,20 +2069,35 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                                 <MoreVertical className="w-4 h-4" />
                               </Button>
                             </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem onClick={() => handleViewDetails(user)}>
+                            <DropdownMenuContent align="end" className="w-48">
+                              <DropdownMenuItem 
+                                onClick={() => handleLoginAsUser(user)}
+                                className="text-purple-600 dark:text-purple-400 font-semibold cursor-pointer focus:text-purple-700 focus:bg-purple-50 dark:focus:bg-purple-950/50"
+                              >
+                                <LogIn className="w-4 h-4 mr-2 text-purple-600 dark:text-purple-400" />
+                                Login as User
+                              </DropdownMenuItem>
+                              <DropdownMenuItem 
+                                onClick={() => handleOpenReviewKyc(user)}
+                                className="cursor-pointer font-medium"
+                              >
+                                <ShieldCheck className="w-4 h-4 mr-2 text-indigo-500" />
+                                Review KYC
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => handleViewDetails(user)} className="cursor-pointer">
                                 <Eye className="w-4 h-4 mr-2" />
                                 View Details
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleEditBalance(user)}>
+                              <DropdownMenuItem onClick={() => handleEditBalance(user)} className="cursor-pointer">
                                 <Edit className="w-4 h-4 mr-2" />
                                 Edit Balance
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleViewActivities(user)}>
+                              <DropdownMenuItem onClick={() => handleViewActivities(user)} className="cursor-pointer">
                                 <Activity className="w-4 h-4 mr-2" />
                                 View Activities
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleBlockUser(user.id)}>
+                              <DropdownMenuItem onClick={() => handleBlockUser(user.id)} className="cursor-pointer">
                                 {user.blocked ? (
                                   <>
                                     <Unlock className="w-4 h-4 mr-2" />
@@ -1748,9 +2110,10 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                                   </>
                                 )}
                               </DropdownMenuItem>
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem
                                 onClick={() => handleDeleteUser(user.id)}
-                                className="text-red-600 dark:text-red-400"
+                                className="text-red-600 dark:text-red-400 cursor-pointer"
                               >
                                 <Trash className="w-4 h-4 mr-2" />
                                 Delete User
@@ -1825,18 +2188,29 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-4 sm:gap-6">
                             <div className="text-right">
                               <div className="flex items-center gap-2 justify-end mb-1">
-                                <span className="text-lg text-gray-900 dark:text-white">
-                                  ${price.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                <span className="text-lg text-gray-900 dark:text-white font-medium">
+                                  ${(price || (asset.symbol.includes('USDT') ? 1.00 : 0)).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                                 </span>
-                                <Badge variant={change >= 0 ? 'default' : 'destructive'} className="flex items-center gap-1">
-                                  {change >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                                <span className="bg-gray-900 dark:bg-black text-emerald-400 text-xs font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                                  <TrendingUp className="w-3 h-3 text-emerald-400" />
                                   {change >= 0 ? '+' : ''}{change.toFixed(1)}%
-                                </Badge>
+                                </span>
                               </div>
                               <p className="text-xs text-gray-500 dark:text-gray-400">24h Change</p>
+                            </div>
+
+                            {/* Shown on Home Toggle matching Image 1 */}
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs sm:text-sm font-medium ${asset.enabled !== false ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-400'}`}>
+                                Shown on Home
+                              </span>
+                              <Switch
+                                checked={asset.enabled !== false}
+                                onCheckedChange={(checked) => handleToggleAssetShown(asset.symbol, checked)}
+                              />
                             </div>
                             
                             {/* Edit/Delete Actions */}
@@ -1931,12 +2305,126 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
           {/* Fees Tab */}
           <TabsContent value="fees">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 mb-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-gray-200 dark:border-gray-700">
+                <div>
+                  <div className="flex items-center gap-3">
+                    <h2 className="text-xl font-bold text-gray-900 dark:text-white">Fee & Deposit Configuration</h2>
+                    {Object.keys(userFeeOverrides).length > 0 && (
+                      <Badge variant="outline" className="bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-200 dark:border-purple-800 text-xs font-semibold">
+                        {Object.keys(userFeeOverrides).length} User Overrides Configured
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                    Manage withdrawal fees, percentage rates, estimated gas fees, and deposit addresses globally or customize for specific users.
+                  </p>
+                </div>
+
+                {/* Scope Selector */}
+                <div className="flex items-center gap-3">
+                  <div className="text-right hidden sm:block">
+                    <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Configuration Scope</p>
+                    <p className="text-[11px] text-gray-400">
+                      {selectedFeeUserId === 'global' ? 'Global Platform Defaults (All Users)' : 'Custom User Mode'}
+                    </p>
+                  </div>
+                  <select
+                    value={selectedFeeUserId}
+                    onChange={(e) => setSelectedFeeUserId(e.target.value)}
+                    className="h-10 px-3.5 rounded-xl border-2 border-purple-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs font-semibold focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
+                  >
+                    <option value="global">🌐 Global Platform Defaults (All Users)</option>
+                    <optgroup label="Configure for Specific User">
+                      {users.map((u) => {
+                        const hasOverride = Boolean(userFeeOverrides[u.id]?.enabled);
+                        return (
+                          <option key={u.id} value={u.id}>
+                            👤 {u.fullName || u.email} ({u.email}) {hasOverride ? '★ Custom Rates Active' : ''}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                  </select>
+                </div>
+              </div>
+
+              {/* Selected User Custom Banner (Shown only when a specific user is selected) */}
+              {selectedFeeUserId !== 'global' && (() => {
+                const targetUserObj = users.find(u => u.id === selectedFeeUserId);
+                const currentOverride = feeService.getUserFeeOverride(selectedFeeUserId);
+                const isCustomActive = Boolean(currentOverride?.enabled);
+
+                return (
+                  <div className="mt-6 p-5 rounded-2xl bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/30 dark:to-indigo-950/30 border border-purple-200 dark:border-purple-800 space-y-4">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+                          {(targetUserObj?.fullName || targetUserObj?.email || 'U').charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-gray-900 dark:text-white text-base">
+                              {targetUserObj?.fullName || 'User'}
+                            </h3>
+                            <Badge className={isCustomActive ? "bg-emerald-600 text-white text-[10px]" : "bg-gray-400 text-white text-[10px]"}>
+                              {isCustomActive ? 'Custom Override Active' : 'Inheriting Global Rates'}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-gray-600 dark:text-gray-400">
+                            {targetUserObj?.email} • ID: {targetUserObj?.id}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* User Custom Controls */}
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 bg-white dark:bg-gray-800 px-3 py-1.5 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
+                          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                            Enable Custom Rates
+                          </span>
+                          <Switch
+                            checked={isCustomActive}
+                            onCheckedChange={handleToggleUserCustomFees}
+                          />
+                        </div>
+
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleCloneGlobalFeesToUser}
+                          className="text-xs h-8 bg-white dark:bg-gray-800"
+                        >
+                          Clone Global Defaults
+                        </Button>
+
+                        {currentOverride && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={handleResetUserCustomFees}
+                            className="text-xs h-8"
+                          >
+                            Reset to Global
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-purple-800 dark:text-purple-300 bg-white/60 dark:bg-gray-900/40 p-2.5 rounded-lg border border-purple-100 dark:border-purple-900/50">
+                      💡 <strong>Note:</strong> While custom rates are enabled for this user, their Send, Swap, and Buy/Deposit transactions will immediately use the rates and deposit addresses configured below. Any unedited coin will fall back to platform defaults.
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
+
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6">
-              <h2 className="text-xl mb-6 text-gray-900 dark:text-white">Fee & Deposit Configuration</h2>
-              
               <div className="space-y-6">
                 {Object.entries(fees).map(([asset, fee]) => {
                   const assetInfo = assetConfig.find(a => a.symbol === asset);
+                  const targetUserOverride = selectedFeeUserId !== 'global' ? feeService.getUserFeeOverride(selectedFeeUserId) : null;
+                  const isCoinOverridden = Boolean(targetUserOverride?.enabled && targetUserOverride?.fees?.[asset]);
                   
                   const handleCopyDeposit = async () => {
                     const success = await copyToClipboard(fee.deposit_address);
@@ -1949,28 +2437,46 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                   };
 
                   return (
-                    <div key={asset} className="p-6 bg-gray-50 dark:bg-gray-700 rounded-xl border-2 border-gray-200 dark:border-gray-600">
-                      <div className="flex items-center justify-between mb-6">
+                    <div key={asset} className={`p-6 rounded-xl border-2 transition-all ${
+                      isCoinOverridden 
+                        ? 'bg-purple-50/40 dark:bg-purple-950/20 border-purple-400 dark:border-purple-700' 
+                        : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600'
+                    }`}>
+                      <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
                         <div className="flex items-center gap-3">
                           {assetInfo?.logoUrl ? (
                             <img src={assetInfo.logoUrl} alt={assetInfo.name} className="w-12 h-12 rounded-full object-cover" />
                           ) : (
-                            <div className={`w-12 h-12 rounded-full ${assetInfo?.color} flex items-center justify-center text-white text-xl`}>
-                              {assetInfo?.icon}
+                            <div className={`w-12 h-12 rounded-full ${assetInfo?.color || 'bg-purple-600'} flex items-center justify-center text-white text-xl`}>
+                              {assetInfo?.icon || asset.charAt(0)}
                             </div>
                           )}
                           <div>
-                            <h3 className="text-lg text-gray-900 dark:text-white">{assetInfo?.name}</h3>
-                            <p className="text-sm text-gray-600 dark:text-gray-400">{asset}</p>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h3 className="text-lg font-bold text-gray-900 dark:text-white">{assetInfo?.name || asset}</h3>
+                              {selectedFeeUserId !== 'global' && (
+                                isCoinOverridden ? (
+                                  <Badge className="bg-purple-600 hover:bg-purple-700 text-white text-[10px] px-2 py-0.5">
+                                    ★ Custom User Rate
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-[10px] px-2 py-0.5 text-gray-500 border-gray-300">
+                                    Inherited from Global
+                                  </Badge>
+                                )
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-600 dark:text-gray-400">{asset} {assetInfo?.network ? `• ${assetInfo.network}` : ''}</p>
                           </div>
                         </div>
                         <Button 
                           variant="outline" 
                           size="sm"
                           onClick={() => handleEditFee(asset)}
+                          className={isCoinOverridden ? "border-purple-500 text-purple-600 dark:text-purple-400 bg-white dark:bg-gray-800" : ""}
                         >
                           <Edit className="w-4 h-4 mr-2" />
-                          Edit
+                          {selectedFeeUserId === 'global' ? 'Edit Global Fee' : 'Edit User Fee'}
                         </Button>
                       </div>
 
@@ -2051,7 +2557,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
                         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3">
                           <p className="text-xs text-blue-800 dark:text-blue-200">
-                            <strong>Deposit Instructions:</strong> Users send {asset} to this address. Once the transaction is confirmed on the blockchain, their wallet balance will be automatically credited. Minimum deposit: {asset === 'BTC' ? '0.0001' : asset === 'ETH' ? '0.001' : asset === 'USDT' ? '10' : '0.01'} {asset}.
+                            <strong>Deposit Instructions:</strong> Users send {asset} to this address. Once confirmed on the blockchain, their wallet balance will be credited.
                           </p>
                         </div>
                       </div>
@@ -2060,9 +2566,67 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                 })}
               </div>
 
+              {/* Active Overrides Table */}
+              {Object.keys(userFeeOverrides).length > 0 && (
+                <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+                  <h3 className="text-base font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-purple-600" />
+                    <span>Users with Custom Fee Overrides ({Object.keys(userFeeOverrides).length})</span>
+                  </h3>
+                  <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-gray-50 dark:bg-gray-700/50 text-gray-500 font-semibold uppercase">
+                        <tr>
+                          <th className="px-4 py-2.5">User</th>
+                          <th className="px-4 py-2.5">Status</th>
+                          <th className="px-4 py-2.5">Customized Coins</th>
+                          <th className="px-4 py-2.5">Last Updated</th>
+                          <th className="px-4 py-2.5 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100 dark:divide-gray-700 bg-white dark:bg-gray-800">
+                        {Object.values(userFeeOverrides).map((ov: any) => {
+                          const userObj = users.find(u => u.id === ov.userId);
+                          const customCoinCount = Object.keys(ov.fees || {}).length;
+                          return (
+                            <tr key={ov.userId} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/50">
+                              <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">
+                                {ov.userName || userObj?.fullName || ov.userId}
+                                <span className="block text-gray-400 font-normal text-[11px]">{ov.userEmail || userObj?.email}</span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <Badge className={ov.enabled ? "bg-emerald-600 text-white" : "bg-gray-400 text-white"}>
+                                  {ov.enabled ? "Active" : "Disabled"}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3 text-gray-600 dark:text-gray-300">
+                                {customCoinCount} custom coin rate(s) ({Object.keys(ov.fees || {}).join(', ')})
+                              </td>
+                              <td className="px-4 py-3 text-gray-400">
+                                {new Date(ov.updatedAt).toLocaleDateString()}
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setSelectedFeeUserId(ov.userId)}
+                                  className="h-7 text-xs"
+                                >
+                                  Configure Rates
+                                </Button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                 <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                  <strong>Important:</strong> Changes to fee structure and deposit addresses will take effect immediately for all users. All modifications are logged in the audit trail. Ensure deposit addresses are correct before enabling deposits.
+                  <strong>Important:</strong> Changes to fee structure and deposit addresses take effect immediately for the selected scope. All modifications are logged in the audit trail.
                 </p>
               </div>
             </div>
@@ -2280,6 +2844,11 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                 </div>
               )}
             </div>
+          </TabsContent>
+
+          {/* Messages & Mail Tab */}
+          <TabsContent value="messages">
+            <AdminMessagesTab users={users} />
           </TabsContent>
 
           {/* Live Chat Tab */}
@@ -2505,29 +3074,109 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" onClick={() => setShowUserDetails(false)}>
           <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-6 sticky top-0 bg-white dark:bg-gray-800 z-10 pb-4">
-              <h2 className="text-2xl text-gray-900 dark:text-white">User Details</h2>
+              <div className="flex items-center gap-3">
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white">User Details</h2>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setShowUserDetails(false);
+                    handleLoginAsUser(selectedUser);
+                  }}
+                  className="bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold px-3 py-1 h-8 shadow-sm flex items-center gap-1.5"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  Login as User
+                </Button>
+              </div>
               <button onClick={() => setShowUserDetails(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
                 <span className="text-gray-500 text-xl">×</span>
               </button>
             </div>
 
-            {/* User Info */}
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-4 mb-6">
+            {/* Top User Card */}
+            <div className="bg-gray-50 dark:bg-gray-700/60 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 space-y-4">
+              <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white tracking-wide">
+                {selectedUser.id}
+              </p>
+              
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">User ID</p>
-                  <p className="text-sm font-mono text-gray-900 dark:text-white">{selectedUser.id}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5 font-medium">KYC Status</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge
+                      variant={
+                        selectedUser.kyc_status === 'verified'
+                          ? 'default'
+                          : selectedUser.kyc_status === 'pending'
+                          ? 'secondary'
+                          : 'destructive'
+                      }
+                      className="uppercase tracking-wider font-semibold text-[11px] px-2.5 py-0.5 rounded-md"
+                    >
+                      {selectedUser.kyc_status}
+                    </Badge>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2.5 rounded-lg border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1.5 font-medium"
+                      onClick={() => {
+                        setShowUserDetails(false);
+                        handleOpenReviewKyc(selectedUser);
+                      }}
+                    >
+                      <FileText className="w-3.5 h-3.5 text-gray-500" />
+                      Manage KYC
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-2.5 rounded-lg border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/30 flex items-center gap-1.5 font-medium"
+                      onClick={() => {
+                        setShowUserDetails(false);
+                        setSelectedFeeUserId(selectedUser.id);
+                        setActiveTab('fees');
+                      }}
+                    >
+                      <DollarSign className="w-3.5 h-3.5 text-purple-500" />
+                      Custom Fees
+                    </Button>
+                  </div>
                 </div>
+
                 <div>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Email</p>
-                  <p className="text-sm text-gray-900 dark:text-white">{selectedUser.email}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium">Created</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    {new Date(selectedUser.created_at).toLocaleDateString()}
+                  </p>
                 </div>
+
                 <div>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Phone</p>
-                  <p className="text-sm text-gray-900 dark:text-white">{selectedUser.phone}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium">Last Login</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    {selectedUser.last_login ? new Date(selectedUser.last_login).toLocaleDateString() : '01/01/1970'}
+                  </p>
                 </div>
-                <div>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">KYC Status</p>
+              </div>
+            </div>
+
+            {/* Total Balance */}
+            <div className="bg-[#18181b] dark:bg-black rounded-2xl p-6 text-white shadow-md">
+              <p className="text-xs tracking-wider font-semibold uppercase text-gray-400 mb-1">
+                TOTAL BALANCE (USD)
+              </p>
+              <p className="text-4xl font-extrabold tracking-tight">
+                ${calculateTotalBalance(selectedUser.balances).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+            </div>
+
+            {/* Identity & KYC Verification Card */}
+            <div className="border border-gray-200 dark:border-gray-700/80 rounded-2xl p-5 bg-white dark:bg-gray-800/80 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-700">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+                  <h3 className="font-bold text-gray-900 dark:text-white text-base">Identity & KYC Verification</h3>
+                </div>
+                <div className="flex items-center gap-2">
                   <Badge
                     variant={
                       selectedUser.kyc_status === 'verified'
@@ -2536,101 +3185,171 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                         ? 'secondary'
                         : 'destructive'
                     }
+                    className="uppercase tracking-wider font-semibold text-[11px] px-2.5 py-0.5 rounded-md"
                   >
                     {selectedUser.kyc_status}
                   </Badge>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs px-2.5 rounded-lg border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1.5 font-medium"
+                    onClick={() => {
+                      setShowUserDetails(false);
+                      handleOpenReviewKyc(selectedUser);
+                    }}
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-gray-500" />
+                    Review & Edit KYC
+                  </Button>
                 </div>
+              </div>
+
+              {/* KYC Metadata Grid */}
+              <div className="grid grid-cols-3 gap-y-3 gap-x-4 text-xs">
                 <div>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Created</p>
-                  <p className="text-sm text-gray-900 dark:text-white">
-                    {new Date(selectedUser.created_at).toLocaleDateString()}
+                  <span className="text-gray-500 dark:text-gray-400">Legal Name</span>
+                  <p className="font-semibold text-gray-900 dark:text-white mt-0.5">
+                    {selectedUser.kyc_data?.fullName || selectedUser.fullName || 'N/A'}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Last Login</p>
-                  <p className="text-sm text-gray-900 dark:text-white">
-                    {new Date(selectedUser.last_login).toLocaleDateString()}
+                  <span className="text-gray-500 dark:text-gray-400">Document Type</span>
+                  <p className="font-semibold text-gray-900 dark:text-white mt-0.5 uppercase">
+                    {selectedUser.kyc_data?.document?.type?.replace('_', ' ') || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">ID Number</span>
+                  <p className="font-mono font-semibold text-gray-900 dark:text-white mt-0.5">
+                    {selectedUser.kyc_data?.document?.documentNumber || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Country</span>
+                  <p className="font-semibold text-gray-900 dark:text-white mt-0.5">
+                    {selectedUser.kyc_data?.nationality || selectedUser.kyc_data?.residentialAddress?.country || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Date of Birth</span>
+                  <p className="font-semibold text-gray-900 dark:text-white mt-0.5">
+                    {selectedUser.kyc_data?.dateOfBirth || 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Documents Attached</span>
+                  <p className="font-semibold text-gray-900 dark:text-white mt-0.5">
+                    {selectedUser.kyc_data?.document ? '4 Attached' : 'None'}
                   </p>
                 </div>
               </div>
-            </div>
 
-            {/* Total Balance */}
-            <div className="bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl p-6 mb-6 text-white">
-              <p className="text-sm opacity-90 mb-1">Total Balance</p>
-              <p className="text-4xl">
-                ${calculateTotalBalance(selectedUser.balances).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </p>
+              {/* Action Buttons Row */}
+              <div className="grid grid-cols-3 gap-2.5 pt-2">
+                <Button
+                  type="button"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs h-9 rounded-xl flex items-center justify-center gap-1.5"
+                  onClick={() => handleUpdateKycStatus(selectedUser.id, 'verified', {})}
+                >
+                  <Check className="w-4 h-4" />
+                  Approve / Verify
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-amber-400 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 font-medium text-xs h-9 rounded-xl flex items-center justify-center gap-1.5"
+                  onClick={() => handleUpdateKycStatus(selectedUser.id, 'pending', {})}
+                >
+                  <Clock className="w-4 h-4" />
+                  Mark In Review
+                </Button>
+
+                <Button
+                  type="button"
+                  className="bg-rose-600 hover:bg-rose-700 text-white font-medium text-xs h-9 rounded-xl flex items-center justify-center gap-1.5"
+                  onClick={() => {
+                    const reason = prompt('Enter rejection reason (optional):', 'Document verification failed criteria');
+                    if (reason !== null) {
+                      handleUpdateKycStatus(selectedUser.id, 'rejected', { rejectionReason: reason });
+                    }
+                  }}
+                >
+                  <XCircle className="w-4 h-4" />
+                  Reject / Feedback
+                </Button>
+              </div>
             </div>
 
             {/* Login & Security Details */}
-            <div className="mb-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg text-gray-900 dark:text-white">Login & Security</h3>
+            <div className="border border-gray-200 dark:border-gray-700/80 rounded-2xl p-5 bg-white dark:bg-gray-800/80 space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-700">
+                <h3 className="font-bold text-gray-900 dark:text-white text-base">Login & Security</h3>
                 <Button
                   size="sm"
                   variant="outline"
+                  className="h-7 text-xs px-2.5 rounded-lg border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-1.5 font-medium"
                   onClick={() => handleEditLoginDetails(selectedUser)}
                 >
-                  <Edit2 className="w-4 h-4 mr-1" />
+                  <Edit2 className="w-3.5 h-3.5 text-gray-500" />
                   Edit Login Details
                 </Button>
               </div>
               
               <div className="space-y-3">
-                <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
-                  <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-gray-50 dark:bg-gray-700/60 rounded-xl">
+                  <div className="grid grid-cols-2 gap-4 text-xs">
                     <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Password</p>
-                      <p className="text-sm text-gray-900 dark:text-white">••••••••</p>
+                      <p className="text-gray-500 dark:text-gray-400 mb-1">Password</p>
+                      <p className="font-mono text-sm text-gray-900 dark:text-white tracking-widest">••••••••</p>
                     </div>
                     <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Password Last Changed</p>
-                      <p className="text-sm text-gray-900 dark:text-white">
+                      <p className="text-gray-500 dark:text-gray-400 mb-1">Password Last Changed</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
                         {selectedUser.passwordLastChanged ? new Date(selectedUser.passwordLastChanged).toLocaleDateString() : 'Never'}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
-                  <div className="flex items-center justify-between mb-3">
+                <div className="p-4 bg-gray-50 dark:bg-gray-700/60 rounded-xl">
+                  <div className="flex items-center justify-between mb-3 text-xs">
                     <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Two-Factor Authentication</p>
-                      <p className="text-sm text-gray-900 dark:text-white">
+                      <p className="text-gray-500 dark:text-gray-400 mb-1">Two-Factor Authentication</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
                         {selectedUser.twoFactorAuth?.enabled ? 'Enabled' : 'Disabled'}
                       </p>
                     </div>
-                    <Badge variant={selectedUser.twoFactorAuth?.enabled ? 'default' : 'secondary'}>
+                    <Badge variant={selectedUser.twoFactorAuth?.enabled ? 'default' : 'secondary'} className="text-[11px] px-2 py-0.5">
                       {selectedUser.twoFactorAuth?.enabled ? 'Active' : 'Inactive'}
                     </Badge>
                   </div>
                   
                   {selectedUser.twoFactorAuth?.enabled && (
-                    <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-200 dark:border-gray-600">
+                    <div className="grid grid-cols-2 gap-4 pt-3 border-t border-gray-200 dark:border-gray-600 text-xs">
                       <div>
-                        <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Preferred Method</p>
-                        <p className="text-sm text-gray-900 dark:text-white capitalize">
+                        <p className="text-gray-500 dark:text-gray-400 mb-1">Preferred Method</p>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white capitalize">
                           {selectedUser.twoFactorAuth.preferredMethod || 'None'}
                         </p>
                       </div>
                       <div>
-                        <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Setup Date</p>
-                        <p className="text-sm text-gray-900 dark:text-white">
+                        <p className="text-gray-500 dark:text-gray-400 mb-1">Setup Date</p>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">
                           {selectedUser.twoFactorAuth.setupDate ? new Date(selectedUser.twoFactorAuth.setupDate).toLocaleDateString() : 'N/A'}
                         </p>
                       </div>
                       {selectedUser.twoFactorAuth.passcode && (
                         <div>
-                          <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Passcode</p>
-                          <p className="text-sm text-gray-900 dark:text-white font-mono">
+                          <p className="text-gray-500 dark:text-gray-400 mb-1">Passcode</p>
+                          <p className="text-sm font-medium text-gray-900 dark:text-white font-mono">
                             {selectedUser.twoFactorAuth.passcode}
                           </p>
                         </div>
                       )}
                       <div>
-                        <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Biometric</p>
-                        <p className="text-sm text-gray-900 dark:text-white">
+                        <p className="text-gray-500 dark:text-gray-400 mb-1">Biometric</p>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">
                           {selectedUser.twoFactorAuth.biometricEnabled ? 'Enabled' : 'Disabled'}
                         </p>
                       </div>
@@ -2638,22 +3357,62 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                   )}
                 </div>
 
-                <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
-                  <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-gray-50 dark:bg-gray-700/60 rounded-xl">
+                  <div className="grid grid-cols-2 gap-4 text-xs">
                     <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Failed Login Attempts</p>
-                      <p className="text-sm text-gray-900 dark:text-white">
+                      <p className="text-gray-500 dark:text-gray-400 mb-1">Failed Login Attempts</p>
+                      <p className="text-sm font-medium text-gray-900 dark:text-white">
                         {selectedUser.failedLoginAttempts || 0}
                       </p>
                     </div>
                     <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Account Locked</p>
-                      <Badge variant={selectedUser.accountLocked ? 'destructive' : 'default'}>
+                      <p className="text-gray-500 dark:text-gray-400 mb-1">Account Locked</p>
+                      <Badge variant={selectedUser.accountLocked ? 'destructive' : 'default'} className="text-[11px] px-2 py-0.5">
                         {selectedUser.accountLocked ? 'Yes' : 'No'}
                       </Badge>
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+
+            {/* User Restrictions & Custom Message */}
+            <div className="space-y-3">
+              <h3 className="font-bold text-gray-900 dark:text-white text-base">User Restrictions & Custom Message</h3>
+              <div className="bg-gray-50 dark:bg-gray-700/60 border border-gray-100 dark:border-gray-700 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white">Enable Custom Message</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      Show this message when the user attempts to withdraw or swap assets.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={customMessageEnabled}
+                    onCheckedChange={setCustomMessageEnabled}
+                  />
+                </div>
+
+                {customMessageEnabled && (
+                  <div className="space-y-1.5 pt-1 animate-in fade-in">
+                    <label className="text-xs font-medium text-gray-600 dark:text-gray-400">Notice Text for User</label>
+                    <Textarea
+                      value={customMessageText}
+                      onChange={(e) => setCustomMessageText(e.target.value)}
+                      placeholder="We are currently experiencing high transaction traffic, please try again later"
+                      rows={2}
+                      className="text-xs bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-xl"
+                    />
+                  </div>
+                )}
+
+                <Button
+                  onClick={handleSaveCustomMessage}
+                  className="bg-[#18181b] hover:bg-black text-white dark:bg-white dark:text-black dark:hover:bg-gray-100 font-semibold text-xs h-9 rounded-xl flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  Save Custom Message
+                </Button>
               </div>
             </div>
 
@@ -2708,6 +3467,18 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
             </div>
           </div>
         </div>
+      )}
+
+      {/* Review KYC Modal */}
+      {showReviewKyc && kycUserToReview && (
+        <ReviewKycModal
+          user={kycUserToReview}
+          onUpdateStatus={handleUpdateKycStatus}
+          onClose={() => {
+            setShowReviewKyc(false);
+            setKycUserToReview(null);
+          }}
+        />
       )}
 
       {/* Edit Balance Modal */}
@@ -4619,6 +5390,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       {/* Edit Fee Modal */}
       {editingFee && (() => {
         const assetInfo = assetConfig.find(a => a.symbol === editingFee.asset);
+        const targetUserObj = selectedFeeUserId !== 'global' ? users.find(u => u.id === selectedFeeUserId) : null;
         return (
           <EditFeeModal
             asset={editingFee.asset}
@@ -4626,6 +5398,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
             assetIcon={assetInfo?.icon || '?'}
             assetColor={assetInfo?.color || 'bg-gray-500'}
             feeData={editingFee.data}
+            targetUser={targetUserObj ? { id: targetUserObj.id, fullName: targetUserObj.fullName, email: targetUserObj.email } : null}
             onSave={(updatedFee) => handleSaveFee(editingFee.asset, updatedFee)}
             onClose={() => setEditingFee(null)}
           />

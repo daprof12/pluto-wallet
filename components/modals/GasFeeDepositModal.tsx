@@ -6,6 +6,7 @@ import { Input } from '../ui/input';
 import { Badge } from '../ui/badge';
 import { copyToClipboard } from '../../utils/clipboard';
 import { loadAssetConfig } from '../../utils/assetConfig';
+import { feeService } from '../../utils/feeService';
 
 interface GasFeeDepositModalProps {
   onClose: () => void;
@@ -59,26 +60,26 @@ export default function GasFeeDepositModal({
     setUsdAmount(usdValue);
   }, [estimatedGasFee, gasFeeAsset]);
 
-  // Load deposit addresses from admin configuration
+  // Load deposit addresses from admin configuration (respects user-specific overrides and covers all assets)
   const getDepositAddresses = () => {
-    const adminFees = dataService.getItem('pluto_admin_fees');
-    if (adminFees) {
-      const fees = JSON.parse(adminFees);
+    try {
+      const fees = feeService.getEffectiveFees(walletData?.userId || walletData?.id);
+      const addresses: Record<string, string> = {};
+      Object.keys(fees).forEach((assetKey) => {
+        if (fees[assetKey]?.deposit_address) {
+          addresses[assetKey] = fees[assetKey].deposit_address;
+        }
+      });
+      return addresses;
+    } catch {
       return {
-        BTC: fees.BTC?.deposit_address || 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
-        ETH: fees.ETH?.deposit_address || '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
-        SOL: fees.SOL?.deposit_address || 'DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK',
-        BNB: fees.BNB?.deposit_address || 'bnb1grpf0955h0ykzq3ar5nmum7y6gdfl6lxfn46h2',
-        USDT: fees.USDT?.deposit_address || 'TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9'
+        BTC: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
+        ETH: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
+        SOL: 'DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK',
+        BNB: 'bnb1grpf0955h0ykzq3ar5nmum7y6gdfl6lxfn46h2',
+        USDT: 'TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9'
       };
     }
-    return {
-      BTC: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
-      ETH: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb',
-      SOL: 'DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK',
-      BNB: 'bnb1grpf0955h0ykzq3ar5nmum7y6gdfl6lxfn46h2',
-      USDT: 'TN3W4H6rK2ce4vX9YnFQHwKENnHjoxb3m9'
-    };
   };
 
   const depositAddresses = getDepositAddresses();

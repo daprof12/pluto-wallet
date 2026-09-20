@@ -34,6 +34,7 @@ import AssetOverview from './wallet/AssetOverview';
 import TransactionReceiptModal from './wallet/TransactionReceiptModal';
 import Logo from './Logo';
 import { loadAssetConfig, AssetConfig } from '../utils/assetConfig';
+import { ensureWalletAddresses } from '../utils/addressGenerator';
 import { useCryptoPrices } from '../hooks/useCryptoPrices';
 import { formatPercentage } from '../utils/formatNumber';
 import { formatBalance } from '../utils/formatNumber';
@@ -109,17 +110,36 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
     };
   }, []);
 
+  // Ensure all configured tokens have a deposit address ready
+  useEffect(() => {
+    if (walletData && walletData.addresses) {
+      const updated = ensureWalletAddresses(walletData);
+      if (updated !== walletData) {
+        onUpdateWallet(updated);
+      }
+    }
+  }, [walletData?.id]);
+
   // Real-time cryptocurrency prices from CoinGecko
   const { prices, priceChanges, loading: pricesLoading } = useCryptoPrices(
     assets.map(a => a.symbol),
     60000 // Update every 60 seconds
   );
 
+  // Filter assets to show on home page:
+  // 1. Admin enabled (asset.enabled !== false)
+  // 2. User enabled (walletData.assetDisplaySettings?.[asset.symbol] !== false)
+  const visibleAssets = assets.filter((asset) => {
+    const adminEnabled = asset.enabled !== false;
+    const userEnabled = walletData.assetDisplaySettings?.[asset.symbol] !== false;
+    return adminEnabled && userEnabled;
+  });
+
   const calculateTotal = () => {
     let total = 0;
-    Object.entries(walletData.balances).forEach(([asset, balance]) => {
-      const price = prices[asset as keyof typeof prices] || 0;
-      total += parseFloat(balance as string) * price;
+    Object.entries(walletData.balances || {}).forEach(([asset, balance]) => {
+      const price = prices[asset as keyof typeof prices] || (asset.includes('USDT') ? 1.00 : 0);
+      total += parseFloat(balance as string || '0') * price;
     });
     return total;
   };
@@ -222,7 +242,7 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       {/* Header */}
       <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
-        <div className="container mx-auto px-4 py-4">
+        <div className="container mx-auto px-4 py-4 max-w-4xl">
           <div className="flex items-center justify-between">
             {currentPage === 'home' ? (
               <>
@@ -432,10 +452,23 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                       </div>
                     ))}
                   </>
+                ) : visibleAssets.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <p className="text-gray-500 dark:text-gray-400 text-sm mb-3">
+                      No assets currently displayed on your home page.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setCurrentPage('settings')}
+                      className="text-sm font-semibold text-purple-600 dark:text-purple-400 hover:underline"
+                    >
+                      Manage displayed assets in Settings → Addresses
+                    </button>
+                  </div>
                 ) : (
-                  assets.map((asset) => {
+                  visibleAssets.map((asset) => {
                     const balance = parseFloat(walletData.balances[asset.symbol] || '0');
-                    const price = prices[asset.symbol as keyof typeof prices] || 0;
+                    const price = prices[asset.symbol as keyof typeof prices] || (asset.symbol.includes('USDT') ? 1.00 : 0);
                     const value = balance * price;
                     const change = priceChanges[asset.symbol as keyof typeof priceChanges] || 0;
 
@@ -446,7 +479,7 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                       value: `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                       change: formatPercentage(change),
                       icon: asset.color,
-                      network: asset.name
+                      network: asset.network || asset.name
                     };
 
                     return (
@@ -457,27 +490,32 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                       >
                         <div className="flex items-center gap-4">
                           {asset.logoUrl ? (
-                            <img src={asset.logoUrl} alt={asset.name} className="w-12 h-12 rounded-full" />
+                            <img src={asset.logoUrl} alt={asset.name} className="w-12 h-12 rounded-full object-cover shrink-0" />
                           ) : (
-                            <div className={`w-12 h-12 rounded-full ${asset.color} flex items-center justify-center text-white text-xl`}>
-                              {asset.icon}
+                            <div className={`w-12 h-12 rounded-full ${asset.color} flex items-center justify-center text-white text-xl font-bold shrink-0`}>
+                              {asset.icon || asset.symbol.charAt(0)}
                             </div>
                           )}
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-gray-900 dark:text-white">{asset.name}</span>
-                              <span className="text-gray-900 dark:text-white">{formatBalance(balance)} {asset.symbol}</span>
+                              <div className="flex items-center gap-2 truncate">
+                                <span className="text-gray-900 dark:text-white font-medium">{asset.name}</span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400">({asset.symbol})</span>
+                              </div>
+                              <span className="text-gray-900 dark:text-white font-semibold shrink-0 ml-2">
+                                {formatBalance(balance)} {asset.symbol.replace(/_.*$/, '')}
+                              </span>
                             </div>
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <span className="text-sm text-gray-600 dark:text-gray-400">
                                   ${price.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                                 </span>
-                                <span className={`text-xs px-2 py-0.5 rounded ${change >= 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
+                                <span className={`text-xs px-2 py-0.5 rounded font-medium ${change >= 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
                                   {change >= 0 ? '+' : ''}{change.toFixed(1)}%
                                 </span>
                               </div>
-                              <span className="text-sm text-gray-600 dark:text-gray-400">
+                              <span className="text-sm text-gray-600 dark:text-gray-400 font-medium shrink-0 ml-2">
                                 ${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </span>
                             </div>
@@ -692,7 +730,7 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
 
       {/* Bottom Navigation */}
       <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 z-40">
-        <div className="container mx-auto px-4">
+        <div className="container mx-auto px-4 max-w-4xl">
           <div className="flex items-center justify-around py-3">
             <button
               onClick={() => {

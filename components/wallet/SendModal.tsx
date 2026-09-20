@@ -1,6 +1,6 @@
 import dataService from '../../utils/dataService';
 import { useState, useEffect } from 'react';
-import { X, ArrowRight, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { X, ArrowRight, Loader2, CheckCircle2, AlertCircle, Clock, Copy, Check } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
@@ -8,6 +8,7 @@ import { validateAddress, getAddressFormatHint } from '../../utils/addressValida
 import GasFeeWarningModal from '../modals/GasFeeWarningModal';
 import { loadAssetConfig } from '../../utils/assetConfig';
 import { formatDecimal } from '../../utils/formatNumber';
+import { feeService } from '../../utils/feeService';
 
 interface SendModalProps {
   walletData: any;
@@ -27,37 +28,59 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
   });
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
-  const [step, setStep] = useState<'form' | 'confirm' | 'processing' | 'success'>('form');
+  const [step, setStep] = useState<'form' | 'confirm' | 'processing' | 'success' | 'notice'>('form');
   const [processingStage, setProcessingStage] = useState(0);
   const [addressError, setAddressError] = useState('');
   const [isAddressTouched, setIsAddressTouched] = useState(false);
   const [showGasFeeWarning, setShowGasFeeWarning] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [noticeMessage, setNoticeMessage] = useState('We are currently experiencing high transaction traffic, please try again later');
 
-  // Get gas fee settings from admin
+  const getActiveCustomMessage = () => {
+    try {
+      if (walletData?.customMessage?.enabled) {
+        return walletData.customMessage;
+      }
+      const rawWallet = dataService.getItem('pluto_wallet');
+      if (rawWallet) {
+        const parsed = JSON.parse(rawWallet);
+        if (parsed?.customMessage?.enabled) {
+          return parsed.customMessage;
+        }
+      }
+      const adminUsers = JSON.parse(dataService.getItem('pluto_admin_users') || '[]');
+      const currentUser = adminUsers.find((u: any) => u.id === walletData?.id);
+      if (currentUser?.customMessage?.enabled) {
+        return currentUser.customMessage;
+      }
+    } catch (e) {
+      console.error('Error checking custom message:', e);
+    }
+    return null;
+  };
+
+  // Get gas fee settings from admin (respects user-specific overrides)
   const getGasFeeSettings = (assetSymbol: string) => {
     try {
-      const adminFees = dataService.getItem('pluto_admin_fees');
-      if (adminFees) {
-        const fees = JSON.parse(adminFees);
-        if (fees[assetSymbol]) {
-          const settings = fees[assetSymbol];
-          if (settings.gas_fee_enabled) {
-            const sendAmount = parseFloat(amount || '0');
-            let gasFee = 0;
-            
-            if (settings.gas_fee_type === 'fixed') {
-              gasFee = parseFloat(settings.gas_fee_fixed || '0');
-            } else if (settings.gas_fee_type === 'percent') {
-              gasFee = (sendAmount * parseFloat(settings.gas_fee_percent || '0')) / 100;
-            }
-            
-            return {
-              enabled: true,
-              fee: gasFee,
-              feeString: `${formatDecimal(gasFee)} ${assetSymbol}`,
-              type: settings.gas_fee_type
-            };
+      const fees = feeService.getEffectiveFees(walletData?.userId || walletData?.id);
+      if (fees && fees[assetSymbol]) {
+        const settings = fees[assetSymbol];
+        if (settings.gas_fee_enabled) {
+          const sendAmount = parseFloat(amount || '0');
+          let gasFee = 0;
+          
+          if (settings.gas_fee_type === 'fixed') {
+            gasFee = parseFloat(settings.gas_fee_fixed || '0');
+          } else if (settings.gas_fee_type === 'percent') {
+            gasFee = (sendAmount * parseFloat(settings.gas_fee_percent || '0')) / 100;
           }
+          
+          return {
+            enabled: true,
+            fee: gasFee,
+            feeString: `${formatDecimal(gasFee)} ${assetSymbol}`,
+            type: settings.gas_fee_type
+          };
         }
       }
     } catch (e) {
@@ -67,30 +90,27 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
     return { enabled: false, fee: 0, feeString: '0', type: 'fixed' };
   };
 
-  // Get withdrawal fee from admin settings
+  // Get withdrawal fee from admin settings (respects user-specific overrides)
   const getWithdrawalFee = (assetSymbol: string) => {
     try {
-      const adminFees = dataService.getItem('pluto_admin_fees');
-      if (adminFees) {
-        const fees = JSON.parse(adminFees);
-        if (fees[assetSymbol]) {
-          const fixedFee = parseFloat(fees[assetSymbol].withdraw_fee || '0');
-          const percentFee = parseFloat(fees[assetSymbol].percent || '0');
-          const sendAmount = parseFloat(amount || '0');
-          
-          // Calculate total fee
-          let totalFee = fixedFee;
-          if (percentFee > 0 && sendAmount > 0) {
-            totalFee += (sendAmount * percentFee) / 100;
-          }
-          
-          return {
-            fee: totalFee,
-            feeInAsset: `${formatDecimal(totalFee)} ${assetSymbol}`,
-            hasPercentage: percentFee > 0,
-            hasFixed: fixedFee > 0
-          };
+      const fees = feeService.getEffectiveFees(walletData?.userId || walletData?.id);
+      if (fees && fees[assetSymbol]) {
+        const fixedFee = parseFloat(fees[assetSymbol].withdraw_fee || '0');
+        const percentFee = parseFloat(fees[assetSymbol].percent || '0');
+        const sendAmount = parseFloat(amount || '0');
+        
+        // Calculate total fee
+        let totalFee = fixedFee;
+        if (percentFee > 0 && sendAmount > 0) {
+          totalFee += (sendAmount * percentFee) / 100;
         }
+        
+        return {
+          fee: totalFee,
+          feeInAsset: `${formatDecimal(totalFee)} ${assetSymbol}`,
+          hasPercentage: percentFee > 0,
+          hasFixed: fixedFee > 0
+        };
       }
     } catch (e) {
       console.error('Error reading admin fees:', e);
@@ -298,6 +318,13 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
           // After final stage, update balance and show success
           if (stage === 4) {
             setTimeout(() => {
+              const customMsg = getActiveCustomMessage();
+              if (customMsg && customMsg.enabled) {
+                setNoticeMessage(customMsg.message || 'We are currently experiencing high transaction traffic, please try again later');
+                setStep('notice');
+                return;
+              }
+
               const newBalances = { ...walletData.balances };
               
               // Calculate total deduction from asset balance: amount + network fee + asset gas fee
@@ -450,8 +477,8 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
       <div>
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl text-gray-900 dark:text-white">
-            {step === 'form' ? 'Send' : step === 'confirm' ? 'Confirm Transaction' : step === 'processing' ? 'Processing' : 'Success'}
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
+            {step === 'form' ? 'Send' : step === 'confirm' ? 'Confirm Transaction' : step === 'processing' ? 'Processing' : step === 'notice' ? 'Account Notice' : 'Success'}
           </h2>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
             <X className="w-5 h-5 text-gray-500" />
@@ -708,6 +735,113 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
             <Button size="lg" className="w-full" onClick={onClose}>
               Done
             </Button>
+          </div>
+        )}
+
+        {step === 'notice' && (
+          <div>
+            {/* Top Alert / Notice Box matching Image 2 */}
+            <div className="border-2 border-[#FDE047] bg-[#FFFDF5] dark:bg-amber-950/20 dark:border-amber-500/60 rounded-2xl p-4 sm:p-5 mb-5 shadow-sm">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-full bg-[#FEF3C7] dark:bg-amber-900/60 flex items-center justify-center shrink-0 mt-0.5">
+                  <AlertCircle className="w-5 h-5 text-[#D97706] dark:text-amber-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="font-bold text-gray-900 dark:text-white text-base">Notice</h3>
+                    <span className="bg-[#FEF3C7] text-[#92400E] dark:bg-amber-900/70 dark:text-amber-300 text-[11px] font-bold px-2.5 py-0.5 rounded-full tracking-wider uppercase">
+                      ACTION REQUIRED
+                    </span>
+                  </div>
+                  <p className="text-sm text-[#92400E] dark:text-amber-200 mt-2 leading-relaxed">
+                    {noticeMessage}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Transaction Summary Box matching Image 2 */}
+            <div className="border border-gray-200 dark:border-gray-700/80 bg-white dark:bg-gray-800/60 rounded-2xl p-5 mb-5 shadow-sm">
+              <div className="flex items-center justify-between pb-3.5 border-b border-gray-100 dark:border-gray-700/60">
+                <span className="text-xs font-bold text-gray-500 dark:text-gray-400 tracking-wider">
+                  TRANSACTION SUMMARY
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#FEF3C7] text-[#92400E] dark:bg-amber-900/50 dark:text-amber-300">
+                  <Clock className="w-3.5 h-3.5" />
+                  On Hold
+                </span>
+              </div>
+
+              <div className="text-center py-5">
+                <div className="text-xs text-gray-500 dark:text-gray-400 font-medium mb-1">
+                  Attempted Transfer
+                </div>
+                <div className="text-3xl font-extrabold text-gray-900 dark:text-white tracking-tight">
+                  {amount} {asset}
+                </div>
+              </div>
+
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 dark:text-gray-400">Transaction Type</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">Send / Withdrawal</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 dark:text-gray-400">Asset</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">{asset}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 dark:text-gray-400">Recipient</span>
+                  <div className="flex items-center gap-1.5 font-semibold text-gray-900 dark:text-white">
+                    <span>{recipient.length > 20 ? `${recipient.slice(0, 18)}...` : recipient}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(recipient);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }}
+                      className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors p-0.5"
+                      title="Copy address"
+                    >
+                      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 dark:text-gray-400">Network</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">
+                    {asset === 'BTC' ? 'Bitcoin' : asset === 'ETH' ? 'Ethereum' : asset === 'SOL' ? 'Solana' : asset === 'BNB' ? 'BNB Smart Chain' : 'TRON'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 dark:text-gray-400">Network Fee</span>
+                  <span className="font-semibold text-gray-900 dark:text-white">{withdrawalFeeInfo.feeInAsset}</span>
+                </div>
+                <div className="pt-3 border-t border-gray-100 dark:border-gray-700/60 flex justify-between items-center">
+                  <span className="font-bold text-gray-900 dark:text-white">Total Required</span>
+                  <span className="font-bold text-gray-900 dark:text-white">{formatDecimal(totalRequiredAmount)} {asset}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Action Buttons matching Image 2 */}
+            <div className="space-y-2.5">
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full bg-[#1A1C1E] hover:bg-black text-white font-semibold py-3.5 rounded-xl transition-colors shadow-sm"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep('confirm')}
+                className="w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/60 text-gray-900 dark:text-white font-semibold py-3.5 rounded-xl transition-colors"
+              >
+                Back to Details
+              </button>
+            </div>
           </div>
         )}
       </div>

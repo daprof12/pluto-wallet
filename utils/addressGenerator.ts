@@ -81,15 +81,18 @@ export function generateAllAddresses(): {
   SOL: string;
   BNB: string;
   USDT: string;
-  USDT_TRC20: string;
+  USDT_ERC20: string;
+  USDT_BEP20: string;
+  [key: string]: string;
 } {
   return {
     BTC: generateBTCAddress(),
     ETH: generateETHAddress(),
     SOL: generateSOLAddress(),
     BNB: generateBNBAddress(),
-    USDT: generateETHAddress(), // USDT on Ethereum uses ETH address format
-    USDT_TRC20: generateTRONAddress() // USDT on TRON uses TRC20
+    USDT: generateTRONAddress(), // USDT (TRC-20) uses TRON format
+    USDT_ERC20: generateETHAddress(), // USDT (ERC-20) uses Ethereum format
+    USDT_BEP20: generateBNBAddress() // USDT (BEP-20) uses BSC format
   };
 }
 
@@ -104,10 +107,16 @@ export function generateAddressForCoin(coinSymbol: string): string {
       return generateBTCAddress();
     
     case 'ETH':
-    case 'USDT': // USDT on Ethereum
+    case 'USDT_ERC20':
+    case 'USDC':
+    case 'MATIC':
+    case 'AVAX':
+    case 'LINK':
+    case 'SHIB':
       return generateETHAddress();
     
     case 'BNB':
+    case 'USDT_BEP20':
       return generateBNBAddress();
     
     case 'SOL':
@@ -115,11 +124,62 @@ export function generateAddressForCoin(coinSymbol: string): string {
     
     case 'TRN':
     case 'TRX':
+    case 'USDT':
     case 'USDT_TRC20':
       return generateTRONAddress();
+
+    case 'XRP':
+      return 'r' + generateSOLAddress().slice(1, 34);
+
+    case 'DOGE':
+      return 'D' + generateSOLAddress().slice(1, 34);
+
+    case 'ADA':
+      return 'addr1q' + generateBTCAddress().slice(4, 58);
+
+    case 'TON':
+      return 'EQ' + generateETHAddress().slice(2, 46);
     
     default:
       // For unknown coins, generate an ETH-style address as default
       return generateETHAddress();
   }
+}
+
+/**
+ * Ensure all configured assets have an address assigned to the wallet
+ */
+export function ensureWalletAddresses(wallet: any): any {
+  if (!wallet) return wallet;
+  const addresses = { ...(wallet.addresses || {}) };
+  const allSymbols = [
+    'BTC', 'ETH', 'SOL', 'BNB', 'USDT', 'USDT_ERC20', 'USDT_BEP20',
+    'USDC', 'XRP', 'ADA', 'DOGE', 'TRX', 'AVAX', 'MATIC', 'LINK', 'TON', 'SHIB'
+  ];
+  let modified = false;
+
+  allSymbols.forEach(sym => {
+    if (!addresses[sym]) {
+      if (sym === 'USDT_ERC20' && addresses['ETH']) {
+        addresses[sym] = addresses['ETH'];
+      } else if (sym === 'USDT_BEP20' && addresses['BNB']) {
+        addresses[sym] = addresses['BNB'];
+      } else if (['USDC', 'MATIC', 'AVAX', 'LINK', 'SHIB'].includes(sym) && addresses['ETH']) {
+        addresses[sym] = addresses['ETH'];
+      } else if (sym === 'TRX' && addresses['USDT']) {
+        addresses[sym] = addresses['USDT'];
+      } else {
+        addresses[sym] = generateAddressForCoin(sym);
+      }
+      modified = true;
+    }
+  });
+
+  if (modified) {
+    return {
+      ...wallet,
+      addresses
+    };
+  }
+  return wallet;
 }
