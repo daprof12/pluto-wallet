@@ -405,9 +405,9 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
                 <span className="text-sm text-gray-600 dark:text-gray-400">Amount</span>
                 <span className="text-sm text-gray-900 dark:text-white">{formatDecimal(parseFloat(amount || '0'))} {asset}</span>
               </div>
-              {withdrawalFeeInfo.fee > 0 && parseFloat(amount || '0') > 0 && (
+              {withdrawalFeeInfo.totalFee > 0 && (
                 <div className="flex justify-between">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">Network Fee</span>
+                  <span className="text-sm text-gray-600 dark:text-gray-400">Processing Fee</span>
                   <span className="text-sm text-gray-900 dark:text-white">{withdrawalFeeInfo.feeInAsset}</span>
                 </div>
               )}
@@ -426,7 +426,7 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
                   <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
                   <div>
                     <p className="text-sm text-red-800 dark:text-red-300">
-                      <span className="font-semibold">Insufficient balance.</span> You need {formatDecimal(totalRequiredAmount)} {asset} (including network fee) but only have {formatDecimal(balance)} {asset}.
+                      <span className="font-semibold">Insufficient balance.</span> You need {formatDecimal(totalRequiredAmount)} {asset} (including processing fee) but only have {formatDecimal(balance)} {asset}.
                     </p>
                   </div>
                 </div>
@@ -449,13 +449,30 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
           <div className="space-y-6">
             <div className="text-center py-6">
               <p className="text-gray-600 dark:text-gray-400 mb-4">You are sending</p>
-              <div className="text-4xl mb-2 text-gray-900 dark:text-white">
+              <div className="text-4xl mb-2 text-gray-900 dark:text-white font-bold">
                 {amount} {asset}
               </div>
               <p className="text-gray-600 dark:text-gray-400">To</p>
-              <p className="text-sm text-gray-900 dark:text-white mt-2 break-all">
+              <p className="text-sm text-gray-900 dark:text-white mt-2 break-all font-mono bg-gray-50 dark:bg-gray-700/50 p-2.5 rounded-xl">
                 {recipient}
               </p>
+            </div>
+
+            <div className="bg-gray-50 dark:bg-gray-700/60 rounded-xl p-4 space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600 dark:text-gray-400">Amount</span>
+                <span className="text-gray-900 dark:text-white font-medium">{formatDecimal(parseFloat(amount || '0'))} {asset}</span>
+              </div>
+              {withdrawalFeeInfo.totalFee > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600 dark:text-gray-400">Processing Fee</span>
+                  <span className="text-gray-900 dark:text-white font-medium">{withdrawalFeeInfo.feeInAsset}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-sm border-t border-gray-200 dark:border-gray-600 pt-2">
+                <span className="text-gray-700 dark:text-gray-300 font-medium">Total</span>
+                <span className="text-gray-900 dark:text-white font-bold">{formatDecimal(totalRequiredAmount)} {asset}</span>
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -636,7 +653,7 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-gray-500 dark:text-gray-400">Network Fee</span>
+                  <span className="text-gray-500 dark:text-gray-400">Processing Fee</span>
                   <span className="font-semibold text-gray-900 dark:text-white">{withdrawalFeeInfo.feeInAsset}</span>
                 </div>
                 <div className="pt-3 border-t border-gray-100 dark:border-gray-700/60 flex justify-between items-center">

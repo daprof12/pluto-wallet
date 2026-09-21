@@ -145,9 +145,10 @@ export function calculateProcessingFee(
   amount: number | string,
   effectiveFees: FeeConfigMap
 ): {
+  fee: number;
+  totalFee: number;
   fixedFee: number;
   percentFee: number;
-  totalFee: number;
   feeInAsset: string;
   hasPercentage: boolean;
   hasFixed: boolean;
@@ -165,9 +166,10 @@ export function calculateProcessingFee(
   }
 
   return {
+    fee: totalFee,
+    totalFee,
     fixedFee,
     percentFee,
-    totalFee,
     feeInAsset: `${formatDecimal(totalFee)} ${symbol}`,
     hasPercentage: percentFee > 0,
     hasFixed: fixedFee > 0

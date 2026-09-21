@@ -461,10 +461,12 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                       )}
                     </span>
                   </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600 dark:text-gray-400">Network Fee</span>
-                    <span className="text-gray-900 dark:text-white">{swapFeeInfo.feeInAsset}</span>
-                  </div>
+                  {swapFeeInfo.totalFee > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600 dark:text-gray-400">Processing Fee</span>
+                      <span className="text-gray-900 dark:text-white">{swapFeeInfo.feeInAsset}</span>
+                    </div>
+                  )}
                   {gasFeeSettings.enabled && gasFeeSettings.fee > 0 && (
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-600 dark:text-gray-400">
@@ -559,10 +561,12 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                   1 {fromAsset} = {rate.toFixed(8)} {toAsset}
                 </span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600 dark:text-gray-400">Network Fee</span>
-                <span className="text-gray-900 dark:text-white">{swapFeeInfo.feeInAsset}</span>
-              </div>
+              {swapFeeInfo.totalFee > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600 dark:text-gray-400">Processing Fee</span>
+                  <span className="text-gray-900 dark:text-white">{swapFeeInfo.feeInAsset}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600 dark:text-gray-400">Provider</span>
                 <span className="text-gray-900 dark:text-white">1inch Aggregator</span>
@@ -751,7 +755,7 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-gray-500 dark:text-gray-400">Network Fee</span>
+                  <span className="text-gray-500 dark:text-gray-400">Processing Fee</span>
                   <span className="font-semibold text-gray-900 dark:text-white">{swapFeeInfo.feeInAsset}</span>
                 </div>
                 <div className="pt-3 border-t border-gray-100 dark:border-gray-700/60 flex justify-between items-center">
