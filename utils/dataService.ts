@@ -82,9 +82,15 @@ async function syncPendingWrites(): Promise<void> {
     const pending = getPendingWrites();
     if (pending.length === 0) return;
 
-    console.log(`[DataService] Syncing ${pending.length} pending writes to Supabase...`);
+    // Filter out huge keys like pluto_admin_users or pluto_wallet that are handled by direct tables
+    const safePending = pending.filter(p => p.key !== 'pluto_admin_users' && p.key !== 'pluto_wallet').slice(-10);
+    // Clear the pending queue to prevent repeated retry storms
+    localStorage.removeItem(PENDING_WRITES_KEY);
 
-    for (const item of pending) {
+    if (safePending.length === 0) return;
+    console.log(`[DataService] Syncing ${safePending.length} pending writes to Supabase...`);
+
+    for (const item of safePending) {
         try {
             if (item.action === 'set' && item.value !== null) {
                 let parsed: any;
@@ -93,20 +99,14 @@ async function syncPendingWrites(): Promise<void> {
                 } catch {
                     parsed = item.value;
                 }
-                const { error } = await supabase
+                await supabase
                     .from(activeTable)
                     .upsert({ key: item.key, value: parsed });
-                if (!error) {
-                    clearPendingWrite(item.key);
-                }
             } else if (item.action === 'remove') {
-                const { error } = await supabase
+                await supabase
                     .from(activeTable)
                     .delete()
                     .eq('key', item.key);
-                if (!error) {
-                    clearPendingWrite(item.key);
-                }
             }
         } catch (err) {
             console.warn(`[DataService] Failed to sync pending write for key "${item.key}":`, err);
@@ -278,7 +278,11 @@ function setupRealtimeSubscription() {
                             } else {
                                 currentUsers.push(mapped);
                             }
-                            dataService.setItem('pluto_admin_users', JSON.stringify(currentUsers));
+                            const usersStr = JSON.stringify(currentUsers);
+                            memoryCache.set('pluto_admin_users', usersStr);
+                            if (typeof localStorage !== 'undefined') {
+                                localStorage.setItem('pluto_admin_users', usersStr);
+                            }
                             window.dispatchEvent(new CustomEvent('pluto_users_updated', {
                                 detail: { users: currentUsers }
                             }));
@@ -319,7 +323,11 @@ function setupRealtimeSubscription() {
                             const rawUsers = dataService.getItem('pluto_admin_users');
                             let currentUsers: any[] = rawUsers ? JSON.parse(rawUsers) : [];
                             currentUsers = currentUsers.filter(u => u.id !== deletedId);
-                            dataService.setItem('pluto_admin_users', JSON.stringify(currentUsers));
+                            const usersStr = JSON.stringify(currentUsers);
+                            memoryCache.set('pluto_admin_users', usersStr);
+                            if (typeof localStorage !== 'undefined') {
+                                localStorage.setItem('pluto_admin_users', usersStr);
+                            }
                             window.dispatchEvent(new CustomEvent('pluto_users_updated', {
                                 detail: { users: currentUsers }
                             }));
@@ -436,16 +444,6 @@ export const dataService = {
                     addPendingWrite(key, value, 'set');
                 }
             });
-
-            // If updating admin users, automatically sync each user to 'users' table
-            if (key === 'pluto_admin_users') {
-                try {
-                    const parsed = JSON.parse(value);
-                    if (Array.isArray(parsed)) {
-                        parsed.forEach(u => this.syncUserToSupabase(u));
-                    }
-                } catch {}
-            }
         } else {
             addPendingWrite(key, value, 'set');
         }
@@ -516,16 +514,6 @@ export const dataService = {
             if (!success) {
                 addPendingWrite(key, value, 'set');
             }
-
-            // If updating admin users, automatically sync each user to 'users' table
-            if (key === 'pluto_admin_users') {
-                try {
-                    const parsed = JSON.parse(value);
-                    if (Array.isArray(parsed)) {
-                        await Promise.all(parsed.map(u => this.syncUserToSupabase(u)));
-                    }
-                } catch {}
-            }
         } else {
             addPendingWrite(key, value, 'set');
         }
@@ -539,8 +527,8 @@ export const dataService = {
 
         try {
             let targetId = user.id || `usr_${Date.now()}`;
-            // If user already exists in Supabase by email, preserve that id to prevent unique constraint conflict
-            if (user.email) {
+            // Only lookup if user doesn't already have a persistent ID
+            if (user.email && (!user.id || user.id.startsWith('usr_temp_'))) {
                 const { data: existingUser } = await supabase.from('users').select('id').ilike('email', user.email).limit(1);
                 if (existingUser && existingUser.length > 0 && existingUser[0].id) {
                     targetId = existingUser[0].id;
@@ -626,25 +614,6 @@ export const dataService = {
             const { error } = await supabase.from('wallets').upsert(walletRow);
             if (error && error.code !== 'PGRST205') {
                 console.warn('[DataService] Failed to upsert to wallets table:', error.message);
-            }
-
-            // Also update any other wallet rows belonging to this user (e.g. by email or user_id)
-            // to ensure no duplicate or stale wallet rows remain out of sync
-            if (wallet.email) {
-                await supabase.from('wallets').update({
-                    balances: walletRow.balances,
-                    addresses: walletRow.addresses,
-                    transactions: walletRow.transactions,
-                    updated_at: walletRow.updated_at
-                }).ilike('email', wallet.email);
-            }
-            if (walletRow.user_id && walletRow.user_id !== walletRow.id) {
-                await supabase.from('wallets').update({
-                    balances: walletRow.balances,
-                    addresses: walletRow.addresses,
-                    transactions: walletRow.transactions,
-                    updated_at: walletRow.updated_at
-                }).eq('user_id', walletRow.user_id);
             }
 
             console.log(`✅ [DataService] Synced wallet ${walletRow.id} (${wallet.email}) directly to Supabase 'wallets' table`);
@@ -786,7 +755,16 @@ export const dataService = {
                     last_login: u.last_login || u.created_at,
                     created_at: u.created_at
                 }));
-                this.setItem('pluto_admin_users', JSON.stringify(mappedUsers));
+                const usersJson = JSON.stringify(mappedUsers);
+                memoryCache.set('pluto_admin_users', usersJson);
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem('pluto_admin_users', usersJson);
+                }
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('pluto_users_updated', {
+                        detail: { users: mappedUsers }
+                    }));
+                }
 
                 // Also sync active local wallet balances if the active session user is found in remoteUsers
                 const localWalletStr = localStorage.getItem('pluto_wallet') || memoryCache.get('pluto_wallet');

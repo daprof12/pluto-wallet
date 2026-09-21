@@ -448,8 +448,8 @@ export const feeService = {
           updated_at: new Date().toISOString()
         }));
 
-        for (const row of rows) {
-          await supabase.from('admin_fee_settings').upsert(row, { onConflict: 'asset_symbol' });
+        if (rows.length > 0) {
+          await supabase.from('admin_fee_settings').upsert(rows, { onConflict: 'asset_symbol' });
         }
       }
     } catch (e) {

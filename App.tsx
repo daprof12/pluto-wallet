@@ -221,10 +221,11 @@ export default function App() {
       }
     };
 
-    // Listen for custom event (when admin updates balance from same tab)
+    // Listen for custom event (when admin updates balance or realtime triggers update)
     const handleCustomWalletUpdate = ((e: CustomEvent) => {
-      if (e.detail && e.detail.walletData) {
-        setWalletData(e.detail.walletData);
+      const data = e.detail?.walletData || e.detail?.wallet;
+      if (data) {
+        setWalletData(data);
       }
     }) as EventListener;
 
@@ -237,11 +238,13 @@ export default function App() {
 
     window.addEventListener('storage', handleStorageChange);
     window.addEventListener('walletDataUpdated', handleCustomWalletUpdate);
+    window.addEventListener('walletUpdated', handleCustomWalletUpdate);
     window.addEventListener('pluto_data_updated', handlePlutoDataUpdated);
 
     return () => {
       window.removeEventListener('storage', handleStorageChange);
       window.removeEventListener('walletDataUpdated', handleCustomWalletUpdate);
+      window.removeEventListener('walletUpdated', handleCustomWalletUpdate);
       window.removeEventListener('pluto_data_updated', handlePlutoDataUpdated);
     };
   }, []);

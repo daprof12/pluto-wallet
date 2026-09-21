@@ -95,18 +95,12 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
       setAssets(loadAssetConfig());
     };
     
-    const handleWalletUpdate = (event: any) => {
-      if (event.detail?.wallet) {
-        onUpdateWallet(event.detail.wallet);
-      }
-    };
-    
+    // Note: walletUpdated / walletDataUpdated are handled by App.tsx at the top level
+    // to update walletData prop without triggering unwanted cloud write-backs.
     window.addEventListener('assetConfigUpdated', handleAssetConfigUpdate);
-    window.addEventListener('walletUpdated', handleWalletUpdate);
     
     return () => {
       window.removeEventListener('assetConfigUpdated', handleAssetConfigUpdate);
-      window.removeEventListener('walletUpdated', handleWalletUpdate);
     };
   }, []);
 
@@ -180,25 +174,28 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
     onAssetOverviewChange?.(false);
   };
 
-  // Sync wallet data with localStorage periodically (in case admin made changes)
+  // Check local cache periodically for external updates (e.g. from admin) and notify UI without re-uploading
   useEffect(() => {
     const syncInterval = setInterval(() => {
       const storedWallet = dataService.getItem('pluto_wallet');
       if (storedWallet) {
-        const parsedWallet = JSON.parse(storedWallet);
-        // Check if balances or addresses have changed
-        const balancesChanged = JSON.stringify(parsedWallet.balances) !== JSON.stringify(walletData.balances);
-        const addressesChanged = JSON.stringify(parsedWallet.addresses) !== JSON.stringify(walletData.addresses);
-        
-        if (balancesChanged || addressesChanged) {
-          // Update wallet data if there are changes
-          onUpdateWallet(parsedWallet);
-        }
+        try {
+          const parsedWallet = JSON.parse(storedWallet);
+          const balancesChanged = JSON.stringify(parsedWallet.balances) !== JSON.stringify(walletData.balances);
+          const addressesChanged = JSON.stringify(parsedWallet.addresses) !== JSON.stringify(walletData.addresses);
+          
+          if (balancesChanged || addressesChanged) {
+            // Update React state via event without triggering storage.set write-back
+            window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+              detail: { walletData: parsedWallet }
+            }));
+          }
+        } catch {}
       }
-    }, 2000); // Check every 2 seconds
+    }, 4000);
 
     return () => clearInterval(syncInterval);
-  }, [walletData.balances, walletData.addresses, onUpdateWallet]);
+  }, [walletData.balances, walletData.addresses]);
 
   // Show Asset Overview if selected
   if (showAssetOverview && selectedAsset) {
@@ -353,13 +350,17 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
               {showBalance ? <Eye className="w-6 h-6" /> : <EyeOff className="w-6 h-6" />}
             </button>
             <button
-              onClick={() => {
+              onClick={async () => {
                 setIsRefreshing(true);
-                const storedWallet = dataService.getItem('pluto_wallet');
-                if (storedWallet) {
-                  onUpdateWallet(JSON.parse(storedWallet));
-                }
-                // Keep animation running for at least 800ms for visual feedback
+                try {
+                  await dataService.initCloudSync();
+                  const storedWallet = dataService.getItem('pluto_wallet');
+                  if (storedWallet) {
+                    window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+                      detail: { walletData: JSON.parse(storedWallet) }
+                    }));
+                  }
+                } catch {}
                 setTimeout(() => {
                   setIsRefreshing(false);
                 }, 800);
