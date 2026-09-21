@@ -240,13 +240,13 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
             issuingCountry: 'United States',
             expiryDate: '2030-08-12'
           },
-          submittedAt: '2025-11-20T10:00:00Z',
-          reviewedAt: '2025-11-21T14:30:00Z',
+          submittedAt: '2026-09-15T10:00:00Z',
+          reviewedAt: '2026-09-16T14:30:00Z',
           reviewedBy: 'Super Admin',
           adminNotes: 'All identity documents verified against government sanctions database. Clear selfie match.'
         },
-        created_at: '2025-11-20T10:00:00Z',
-        last_login: '2025-11-27T08:30:00Z',
+        created_at: '2026-09-15T10:00:00Z',
+        last_login: '2026-09-21T08:30:00Z',
         blocked: false,
         balances: { BTC: '0.5', ETH: '10.0', SOL: '50.0', BNB: '5.0', USDT: '5000.00' },
         addresses: { 
@@ -293,11 +293,11 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
             issuingCountry: 'Canada',
             expiryDate: '2028-11-04'
           },
-          submittedAt: '2025-11-25T14:20:00Z',
+          submittedAt: '2026-09-18T14:20:00Z',
           adminNotes: 'Awaiting compliance review.'
         },
-        created_at: '2025-11-25T14:20:00Z',
-        last_login: '2025-11-27T09:15:00Z',
+        created_at: '2026-09-18T14:20:00Z',
+        last_login: '2026-09-21T09:15:00Z',
         blocked: false,
         balances: { BTC: '0.1', ETH: '2.5', SOL: '15.0', BNB: '1.2', USDT: '1200.00' },
         addresses: { 
@@ -343,14 +343,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
             issuingCountry: 'United Kingdom',
             expiryDate: '2024-05-10'
           },
-          submittedAt: '2025-11-22T11:30:00Z',
-          reviewedAt: '2025-11-23T09:00:00Z',
+          submittedAt: '2026-09-19T11:30:00Z',
+          reviewedAt: '2026-09-20T09:00:00Z',
           reviewedBy: 'Super Admin',
           rejectionReason: 'ID document has expired. Please upload a valid government-issued ID.',
           adminNotes: 'Document expired in May 2024. Requested resubmission.'
         },
-        created_at: '2025-11-22T11:30:00Z',
-        last_login: '2025-11-26T16:45:00Z',
+        created_at: '2026-09-19T11:30:00Z',
+        last_login: '2026-09-21T16:45:00Z',
         blocked: true,
         balances: { BTC: '0.05', ETH: '1.0', SOL: '5.0', BNB: '0.5', USDT: '500.00' },
         addresses: { 
@@ -388,23 +388,33 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
         const { data: remoteUsers, error } = await supabase.from('users').select('*');
         if (!error && remoteUsers && remoteUsers.length > 0) {
           const valid = remoteUsers.filter(u => u.id !== 'usr_008' && u.id !== 'user_008');
-          const mappedUsers = valid.map(u => ({
-            id: u.id,
-            email: u.email,
-            phone: u.phone || '',
-            fullName: u.full_name || u.fullName || u.email.split('@')[0],
-            password: u.password || '',
-            kyc_status: u.kyc_status || 'pending',
-            kyc_data: u.kyc_data || null,
-            balances: u.balances || {},
-            addresses: u.addresses || {},
-            blocked: !!u.blocked,
-            is_admin: !!u.is_admin,
-            twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
-            user_restriction: u.user_restriction || {},
-            last_login: u.last_login || u.created_at,
-            created_at: u.created_at
-          }));
+          const mappedUsers = valid.map(u => {
+            let createdAt = u.created_at;
+            if ((!createdAt || createdAt.startsWith('2017')) && u.id?.startsWith('usr_')) {
+              const ts = parseInt(u.id.replace('usr_', ''));
+              if (!isNaN(ts) && ts > 1700000000000) createdAt = new Date(ts).toISOString();
+            }
+            const walletId = u.wallet_id || u.walletId || `wallet_${u.id?.replace(/^usr_/, '')}`;
+            return {
+              id: u.id,
+              walletId,
+              wallet_id: walletId,
+              email: u.email,
+              phone: u.phone || '',
+              fullName: u.full_name || u.fullName || u.email.split('@')[0],
+              password: u.password || '',
+              kyc_status: u.kyc_status || 'pending',
+              kyc_data: u.kyc_data || null,
+              balances: u.balances || {},
+              addresses: u.addresses || {},
+              blocked: !!u.blocked,
+              is_admin: !!u.is_admin,
+              twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
+              user_restriction: u.user_restriction || {},
+              last_login: u.last_login || createdAt,
+              created_at: createdAt
+            };
+          });
           setUsers(mappedUsers);
           dataService.setItem('pluto_admin_users', JSON.stringify(mappedUsers));
         }
@@ -425,23 +435,33 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
         const { data: remoteUsers, error } = await supabase.from('users').select('*');
         if (!error && remoteUsers && remoteUsers.length > 0) {
           const valid = remoteUsers.filter(u => u.id !== 'usr_008' && u.id !== 'user_008');
-          const mappedUsers = valid.map(u => ({
-            id: u.id,
-            email: u.email,
-            phone: u.phone || '',
-            fullName: u.full_name || u.fullName || u.email.split('@')[0],
-            password: u.password || '',
-            kyc_status: u.kyc_status || 'pending',
-            kyc_data: u.kyc_data || null,
-            balances: u.balances || {},
-            addresses: u.addresses || {},
-            blocked: !!u.blocked,
-            is_admin: !!u.is_admin,
-            twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
-            user_restriction: u.user_restriction || {},
-            last_login: u.last_login || u.created_at,
-            created_at: u.created_at
-          }));
+          const mappedUsers = valid.map(u => {
+            let createdAt = u.created_at;
+            if ((!createdAt || createdAt.startsWith('2017')) && u.id?.startsWith('usr_')) {
+              const ts = parseInt(u.id.replace('usr_', ''));
+              if (!isNaN(ts) && ts > 1700000000000) createdAt = new Date(ts).toISOString();
+            }
+            const walletId = u.wallet_id || u.walletId || `wallet_${u.id?.replace(/^usr_/, '')}`;
+            return {
+              id: u.id,
+              walletId,
+              wallet_id: walletId,
+              email: u.email,
+              phone: u.phone || '',
+              fullName: u.full_name || u.fullName || u.email.split('@')[0],
+              password: u.password || '',
+              kyc_status: u.kyc_status || 'pending',
+              kyc_data: u.kyc_data || null,
+              balances: u.balances || {},
+              addresses: u.addresses || {},
+              blocked: !!u.blocked,
+              is_admin: !!u.is_admin,
+              twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
+              user_restriction: u.user_restriction || {},
+              last_login: u.last_login || createdAt,
+              created_at: createdAt
+            };
+          });
           setUsers(mappedUsers);
           dataService.setItem('pluto_admin_users', JSON.stringify(mappedUsers));
         }
@@ -2356,7 +2376,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                           </button>
                         </TableCell>
                         <TableCell className="text-sm">
-                          {new Date(user.created_at).toLocaleDateString()}
+                          {(() => {
+                            let d = user.created_at;
+                            if ((!d || d.startsWith('2017')) && user.id?.startsWith('usr_')) {
+                              const ts = parseInt(user.id.replace('usr_', ''));
+                              if (!isNaN(ts) && ts > 1700000000000) d = new Date(ts).toISOString();
+                            }
+                            return d ? new Date(d).toLocaleDateString() : 'N/A';
+                          })()}
                         </TableCell>
                         <TableCell>
                           <Badge variant={user.blocked ? 'destructive' : 'default'}>
@@ -3396,9 +3423,20 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
             {/* Top User Card */}
             <div className="bg-gray-50 dark:bg-gray-700/60 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 space-y-4">
-              <p className="font-mono text-sm font-semibold text-gray-900 dark:text-white tracking-wide">
-                {selectedUser.id}
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-gray-200/60 dark:border-gray-700/60">
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">User ID: </span>
+                  <span className="font-mono text-sm font-semibold text-gray-900 dark:text-white tracking-wide">
+                    {selectedUser.id}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Wallet ID: </span>
+                  <span className="font-mono text-sm font-semibold text-purple-600 dark:text-purple-400 tracking-wide">
+                    {selectedUser.wallet_id || selectedUser.walletId || (selectedUser.id?.startsWith('usr_') ? selectedUser.id.replace(/^usr_/, 'wallet_') : `wallet_${selectedUser.id}`)}
+                  </span>
+                </div>
+              </div>
               
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -3447,14 +3485,23 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                 <div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium">Created</p>
                   <p className="text-sm font-medium text-gray-900 dark:text-white">
-                    {new Date(selectedUser.created_at).toLocaleDateString()}
+                    {(() => {
+                      let d = selectedUser.created_at;
+                      if ((!d || d.startsWith('2017')) && selectedUser.id?.startsWith('usr_')) {
+                        const ts = parseInt(selectedUser.id.replace('usr_', ''));
+                        if (!isNaN(ts) && ts > 1700000000000) d = new Date(ts).toISOString();
+                      }
+                      return d ? new Date(d).toLocaleString() : 'N/A';
+                    })()}
                   </p>
                 </div>
 
                 <div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mb-1 font-medium">Last Login</p>
                   <p className="text-sm font-medium text-gray-900 dark:text-white">
-                    {selectedUser.last_login ? new Date(selectedUser.last_login).toLocaleDateString() : '01/01/1970'}
+                    {selectedUser.last_login && !selectedUser.last_login.startsWith('1970')
+                      ? new Date(selectedUser.last_login).toLocaleString()
+                      : (selectedUser.created_at ? new Date(selectedUser.created_at).toLocaleString() : 'N/A')}
                   </p>
                 </div>
               </div>

@@ -256,9 +256,16 @@ export default function WalletOnboarding({ onComplete, onBack, onImportAuth }: W
   const completeSetup = async () => {
     setIsCompleting(true);
     try {
+      const nowTs = Date.now();
+      const userId = `usr_${nowTs}`;
+      const walletId = `wallet_${nowTs}`;
+
       // Generate valid-format addresses for all chains
       const walletData = {
-        id: `usr_${Date.now()}`,
+        id: userId,
+        userId: userId,
+        walletId: walletId,
+        wallet_id: walletId,
         created_at: new Date().toISOString(),
         email: email,
         phone: phone,
@@ -294,6 +301,8 @@ export default function WalletOnboarding({ onComplete, onBack, onImportAuth }: W
       const existingUsers = JSON.parse(dataService.getItem('pluto_admin_users') || '[]');
       const newUserForAdmin = {
         id: walletData.id,
+        walletId: walletData.walletId,
+        wallet_id: walletData.wallet_id,
         email: walletData.email,
         phone: walletData.phone,
         fullName: walletData.fullName,

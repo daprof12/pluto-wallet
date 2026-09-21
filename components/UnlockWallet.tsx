@@ -143,10 +143,27 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
         } catch {}
       }
 
+      const computedWalletId = matchedWallet?.id?.startsWith('wallet_')
+        ? matchedWallet.id
+        : `wallet_${matchedUser.id?.replace(/^usr_/, '')}`;
+
+      let userCreatedAt = matchedUser.created_at || matchedWallet?.created_at;
+      if ((!userCreatedAt || userCreatedAt.startsWith('2017')) && matchedUser.id?.startsWith('usr_')) {
+        const ts = parseInt(matchedUser.id.replace('usr_', ''));
+        if (!isNaN(ts) && ts > 1700000000000) {
+          userCreatedAt = new Date(ts).toISOString();
+        }
+      }
+      if (!userCreatedAt || userCreatedAt.startsWith('2017')) {
+        userCreatedAt = new Date().toISOString();
+      }
+
       // Reconstruct full active wallet session
       const activeWallet = {
         id: matchedUser.id,
         userId: matchedUser.id,
+        walletId: computedWalletId,
+        wallet_id: computedWalletId,
         email: matchedUser.email,
         phone: matchedUser.phone || '',
         fullName: matchedUser.full_name || matchedUser.fullName || trimmedEmail.split('@')[0],
@@ -160,7 +177,7 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
         blocked: !!matchedUser.blocked,
         twoFactorAuth: matchedUser.two_factor_auth || matchedUser.twoFactorAuth || matchedWallet?.two_factor_auth || {},
         user_restriction: matchedUser.user_restriction || {},
-        created_at: matchedUser.created_at,
+        created_at: userCreatedAt,
         last_login: new Date().toISOString()
       };
 

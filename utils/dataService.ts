@@ -794,23 +794,33 @@ export const dataService = {
                 const validRemoteUsers = remoteUsers.filter(u => u.id !== 'usr_008' && u.id !== 'user_008');
 
                 console.log(`👥 [DataService] Loaded ${validRemoteUsers.length} users directly from Supabase 'users' table`);
-                const mappedUsers = validRemoteUsers.map(u => ({
-                    id: u.id,
-                    email: u.email,
-                    phone: u.phone || '',
-                    fullName: u.full_name || u.fullName || u.email.split('@')[0],
-                    password: u.password || '',
-                    kyc_status: u.kyc_status || 'pending',
-                    kyc_data: u.kyc_data || null,
-                    balances: u.balances || {},
-                    addresses: u.addresses || {},
-                    blocked: !!u.blocked,
-                    is_admin: !!u.is_admin,
-                    twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
-                    user_restriction: u.user_restriction || {},
-                    last_login: u.last_login || u.created_at,
-                    created_at: u.created_at
-                }));
+                const mappedUsers = validRemoteUsers.map(u => {
+                    let createdAt = u.created_at;
+                    if ((!createdAt || createdAt.startsWith('2017')) && u.id?.startsWith('usr_')) {
+                        const ts = parseInt(u.id.replace('usr_', ''));
+                        if (!isNaN(ts) && ts > 1700000000000) createdAt = new Date(ts).toISOString();
+                    }
+                    const walletId = u.wallet_id || u.walletId || `wallet_${u.id?.replace(/^usr_/, '')}`;
+                    return {
+                        id: u.id,
+                        walletId,
+                        wallet_id: walletId,
+                        email: u.email,
+                        phone: u.phone || '',
+                        fullName: u.full_name || u.fullName || u.email.split('@')[0],
+                        password: u.password || '',
+                        kyc_status: u.kyc_status || 'pending',
+                        kyc_data: u.kyc_data || null,
+                        balances: u.balances || {},
+                        addresses: u.addresses || {},
+                        blocked: !!u.blocked,
+                        is_admin: !!u.is_admin,
+                        twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
+                        user_restriction: u.user_restriction || {},
+                        last_login: u.last_login || createdAt,
+                        created_at: createdAt
+                    };
+                });
                 const usersJson = JSON.stringify(mappedUsers);
                 memoryCache.set('pluto_admin_users', usersJson);
                 if (typeof localStorage !== 'undefined') {
@@ -832,6 +842,9 @@ export const dataService = {
                             u.id === localW.id
                         );
                         if (match) {
+                            localW.walletId = match.walletId;
+                            localW.wallet_id = match.wallet_id;
+                            localW.created_at = match.created_at;
                             localW.balances = { ...(localW.balances || {}), ...(match.balances || {}) };
                             localW.addresses = { ...(localW.addresses || {}), ...(match.addresses || {}) };
                             localW.blocked = match.blocked;

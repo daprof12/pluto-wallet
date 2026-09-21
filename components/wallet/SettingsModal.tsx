@@ -854,12 +854,23 @@ export default function SettingsModal({ walletData, onClose, onLogout, onUpdateW
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between py-2 border-b border-gray-200 dark:border-gray-600">
                   <span className="text-gray-600 dark:text-gray-400">Wallet ID</span>
-                  <span className="text-gray-900 dark:text-white">{walletData.id}</span>
+                  <span className="text-gray-900 dark:text-white font-mono">
+                    {walletData.walletId || walletData.wallet_id || (walletData.id?.startsWith('usr_') ? walletData.id.replace(/^usr_/, 'wallet_') : (walletData.id?.startsWith('wallet_') ? walletData.id : `wallet_${walletData.id}`))}
+                  </span>
                 </div>
                 <div className="flex justify-between py-2 border-b border-gray-200 dark:border-gray-600">
                   <span className="text-gray-600 dark:text-gray-400">Created</span>
                   <span className="text-gray-900 dark:text-white">
-                    {new Date(walletData.created_at).toLocaleDateString()}
+                    {(() => {
+                      let created = walletData.created_at;
+                      if ((!created || created.startsWith('2017')) && walletData.id?.startsWith('usr_')) {
+                        const ts = parseInt(walletData.id.replace('usr_', ''));
+                        if (!isNaN(ts) && ts > 1700000000000) {
+                          created = new Date(ts).toISOString();
+                        }
+                      }
+                      return created ? new Date(created).toLocaleDateString() : 'N/A';
+                    })()}
                   </span>
                 </div>
                 <div className="flex justify-between py-2">
@@ -957,7 +968,7 @@ export default function SettingsModal({ walletData, onClose, onLogout, onUpdateW
                     </div>
                     <div>
                       <span className="text-gray-500 dark:text-gray-400">Daily Limit</span>
-                      <p className="font-medium text-emerald-600 dark:text-emerald-400 mt-0.5">Unlimited ($500,000 / day)</p>
+                      <p className="font-medium text-emerald-600 dark:text-emerald-400 mt-0.5">Unlimited</p>
                     </div>
                   </div>
                 </div>
