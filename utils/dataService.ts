@@ -282,6 +282,36 @@ function setupRealtimeSubscription() {
                             window.dispatchEvent(new CustomEvent('pluto_users_updated', {
                                 detail: { users: currentUsers }
                             }));
+
+                            // If updated user is the active logged-in wallet, sync balances immediately
+                            const localWalletStr = dataService.getItem('pluto_wallet');
+                            if (localWalletStr) {
+                                try {
+                                    const localW = JSON.parse(localWalletStr);
+                                    const isMatch = (localW.id && localW.id === updatedUser.id) ||
+                                        (localW.email && updatedUser.email && localW.email.toLowerCase() === updatedUser.email.toLowerCase());
+                                    if (isMatch) {
+                                        const updatedWallet = {
+                                            ...localW,
+                                            balances: updatedUser.balances || localW.balances,
+                                            addresses: updatedUser.addresses || localW.addresses,
+                                            blocked: !!updatedUser.blocked,
+                                            kyc_status: updatedUser.kyc_status || localW.kyc_status
+                                        };
+                                        const updatedStr = JSON.stringify(updatedWallet);
+                                        memoryCache.set('pluto_wallet', updatedStr);
+                                        if (typeof localStorage !== 'undefined') {
+                                            localStorage.setItem('pluto_wallet', updatedStr);
+                                        }
+                                        window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+                                            detail: { walletData: updatedWallet, wallet: updatedWallet }
+                                        }));
+                                        window.dispatchEvent(new CustomEvent('walletUpdated', {
+                                            detail: { wallet: updatedWallet, walletData: updatedWallet }
+                                        }));
+                                    }
+                                } catch {}
+                            }
                         }
                     } else if (payload.eventType === 'DELETE') {
                         const deletedId = payload.old?.id;
@@ -301,6 +331,55 @@ function setupRealtimeSubscription() {
                 if (status === 'SUBSCRIBED') {
                     console.log(`[DataService] Supabase Realtime active on 'users' table`);
                     isRealtimeSubscribed = true;
+                }
+            });
+
+        // 3. Channel for direct 'wallets' table updates
+        supabase
+            .channel('pluto_wallets_sync')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'wallets' },
+                (payload: any) => {
+                    console.log(`[DataService] Realtime wallets table event [${payload.eventType}]:`, payload);
+                    if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+                        const updatedWallet = payload.new;
+                        if (updatedWallet) {
+                            const localWalletStr = dataService.getItem('pluto_wallet');
+                            if (localWalletStr) {
+                                try {
+                                    const localW = JSON.parse(localWalletStr);
+                                    const isMatch = (localW.id && (localW.id === updatedWallet.id || localW.id === updatedWallet.user_id)) ||
+                                        (localW.email && updatedWallet.email && localW.email.toLowerCase() === updatedWallet.email.toLowerCase()) ||
+                                        (localW.userId && (localW.userId === updatedWallet.id || localW.userId === updatedWallet.user_id));
+                                    if (isMatch) {
+                                        const mergedWallet = {
+                                            ...localW,
+                                            balances: updatedWallet.balances || localW.balances,
+                                            addresses: updatedWallet.addresses || localW.addresses,
+                                            transactions: updatedWallet.transactions && updatedWallet.transactions.length > 0 ? updatedWallet.transactions : localW.transactions
+                                        };
+                                        const mergedStr = JSON.stringify(mergedWallet);
+                                        memoryCache.set('pluto_wallet', mergedStr);
+                                        if (typeof localStorage !== 'undefined') {
+                                            localStorage.setItem('pluto_wallet', mergedStr);
+                                        }
+                                        window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+                                            detail: { walletData: mergedWallet, wallet: mergedWallet }
+                                        }));
+                                        window.dispatchEvent(new CustomEvent('walletUpdated', {
+                                            detail: { wallet: mergedWallet, walletData: mergedWallet }
+                                        }));
+                                    }
+                                } catch {}
+                            }
+                        }
+                    }
+                }
+            )
+            .subscribe((status: string) => {
+                if (status === 'SUBSCRIBED') {
+                    console.log(`[DataService] Supabase Realtime active on 'wallets' table`);
                 }
             });
     } catch (err) {
@@ -338,6 +417,20 @@ export const dataService = {
         }
 
         if (isOnline && isSupabaseConfigured()) {
+            // If updating active wallet, automatically sync to 'wallets' table
+            if (key === 'pluto_wallet') {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (parsed && (parsed.id || parsed.email)) {
+                        this.syncWalletToSupabase(parsed);
+                        if (parsed.id) {
+                            writeToSupabase(`pluto_wallet_${parsed.id}`, value);
+                        }
+                    }
+                } catch {}
+                return; // Do NOT write to shared global 'pluto_wallet' KV key
+            }
+
             writeToSupabase(key, value).then(success => {
                 if (!success) {
                     addPendingWrite(key, value, 'set');
@@ -350,16 +443,6 @@ export const dataService = {
                     const parsed = JSON.parse(value);
                     if (Array.isArray(parsed)) {
                         parsed.forEach(u => this.syncUserToSupabase(u));
-                    }
-                } catch {}
-            }
-
-            // If updating active wallet, automatically sync to 'wallets' table
-            if (key === 'pluto_wallet') {
-                try {
-                    const parsed = JSON.parse(value);
-                    if (parsed && (parsed.id || parsed.email)) {
-                        this.syncWalletToSupabase(parsed);
                     }
                 } catch {}
             }
@@ -415,6 +498,20 @@ export const dataService = {
         }
 
         if (isOnline && isSupabaseConfigured()) {
+            // If updating active wallet, automatically sync to 'wallets' table
+            if (key === 'pluto_wallet') {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (parsed && (parsed.id || parsed.email)) {
+                        await this.syncWalletToSupabase(parsed);
+                        if (parsed.id) {
+                            await writeToSupabase(`pluto_wallet_${parsed.id}`, value);
+                        }
+                    }
+                } catch {}
+                return; // Do NOT write to shared global 'pluto_wallet' KV key
+            }
+
             const success = await writeToSupabase(key, value);
             if (!success) {
                 addPendingWrite(key, value, 'set');
@@ -426,16 +523,6 @@ export const dataService = {
                     const parsed = JSON.parse(value);
                     if (Array.isArray(parsed)) {
                         await Promise.all(parsed.map(u => this.syncUserToSupabase(u)));
-                    }
-                } catch {}
-            }
-
-            // If updating active wallet, automatically sync to 'wallets' table
-            if (key === 'pluto_wallet') {
-                try {
-                    const parsed = JSON.parse(value);
-                    if (parsed && (parsed.id || parsed.email)) {
-                        await this.syncWalletToSupabase(parsed);
                     }
                 } catch {}
             }
@@ -451,8 +538,17 @@ export const dataService = {
         if (!isSupabaseConfigured()) return false;
 
         try {
+            let targetId = user.id || `usr_${Date.now()}`;
+            // If user already exists in Supabase by email, preserve that id to prevent unique constraint conflict
+            if (user.email) {
+                const { data: existingUser } = await supabase.from('users').select('id').ilike('email', user.email).limit(1);
+                if (existingUser && existingUser.length > 0 && existingUser[0].id) {
+                    targetId = existingUser[0].id;
+                }
+            }
+
             const userRow = {
-                id: user.id || `usr_${Date.now()}`,
+                id: targetId,
                 email: user.email,
                 phone: user.phone || null,
                 full_name: user.fullName || user.email?.split('@')[0] || 'User',
@@ -512,9 +608,10 @@ export const dataService = {
         if (!isSupabaseConfigured()) return false;
 
         try {
+            const walletId = wallet.id || wallet.userId || `wallet_${Date.now()}`;
             const walletRow = {
-                id: wallet.id,
-                user_id: wallet.userId || wallet.id,
+                id: walletId,
+                user_id: wallet.userId || wallet.id || walletId,
                 email: wallet.email,
                 name: wallet.name || 'Main Wallet',
                 mnemonic_encrypted: wallet.mnemonic_encrypted || '',
@@ -527,13 +624,30 @@ export const dataService = {
             };
 
             const { error } = await supabase.from('wallets').upsert(walletRow);
-            if (error) {
-                if (error.code !== 'PGRST205') {
-                    console.warn('[DataService] Failed to upsert to wallets table:', error.message);
-                }
-                return false;
+            if (error && error.code !== 'PGRST205') {
+                console.warn('[DataService] Failed to upsert to wallets table:', error.message);
             }
-            console.log(`✅ [DataService] Synced wallet ${wallet.id} directly to Supabase 'wallets' table`);
+
+            // Also update any other wallet rows belonging to this user (e.g. by email or user_id)
+            // to ensure no duplicate or stale wallet rows remain out of sync
+            if (wallet.email) {
+                await supabase.from('wallets').update({
+                    balances: walletRow.balances,
+                    addresses: walletRow.addresses,
+                    transactions: walletRow.transactions,
+                    updated_at: walletRow.updated_at
+                }).ilike('email', wallet.email);
+            }
+            if (walletRow.user_id && walletRow.user_id !== walletRow.id) {
+                await supabase.from('wallets').update({
+                    balances: walletRow.balances,
+                    addresses: walletRow.addresses,
+                    transactions: walletRow.transactions,
+                    updated_at: walletRow.updated_at
+                }).eq('user_id', walletRow.user_id);
+            }
+
+            console.log(`✅ [DataService] Synced wallet ${walletRow.id} (${wallet.email}) directly to Supabase 'wallets' table`);
             return true;
         } catch (err) {
             console.warn('[DataService] syncWalletToSupabase error:', err);
@@ -635,6 +749,10 @@ export const dataService = {
                 
                 for (const row of data) {
                     cloudKeys.add(row.key);
+                    // Skip legacy global pluto_wallet key so it does not overwrite active user session
+                    if (row.key === 'pluto_wallet') {
+                        continue;
+                    }
                     const valStr = typeof row.value === 'string' ? row.value : JSON.stringify(row.value);
                     memoryCache.set(row.key, valStr);
                     if (typeof localStorage !== 'undefined') {
@@ -669,6 +787,31 @@ export const dataService = {
                     created_at: u.created_at
                 }));
                 this.setItem('pluto_admin_users', JSON.stringify(mappedUsers));
+
+                // Also sync active local wallet balances if the active session user is found in remoteUsers
+                const localWalletStr = localStorage.getItem('pluto_wallet') || memoryCache.get('pluto_wallet');
+                if (localWalletStr) {
+                    try {
+                        const localW = JSON.parse(localWalletStr);
+                        const match = mappedUsers.find(u => 
+                            (u.email && localW.email && u.email.toLowerCase() === localW.email.toLowerCase()) ||
+                            u.id === localW.id
+                        );
+                        if (match) {
+                            localW.balances = { ...(localW.balances || {}), ...(match.balances || {}) };
+                            localW.addresses = { ...(localW.addresses || {}), ...(match.addresses || {}) };
+                            localW.blocked = match.blocked;
+                            localW.kyc_status = match.kyc_status;
+                            const updatedStr = JSON.stringify(localW);
+                            memoryCache.set('pluto_wallet', updatedStr);
+                            if (typeof localStorage !== 'undefined') {
+                                localStorage.setItem('pluto_wallet', updatedStr);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[DataService] Error merging user balances into local wallet:', e);
+                    }
+                }
             } else if (!userError && remoteUsers && remoteUsers.length === 0) {
                 // Table exists but empty -> push existing local users
                 const localUsersStr = localStorage.getItem('pluto_admin_users');
@@ -687,18 +830,35 @@ export const dataService = {
         try {
             const { data: remoteWallets, error: walletError } = await supabase.from('wallets').select('*');
             if (!walletError && remoteWallets && remoteWallets.length > 0) {
-                const primaryWallet = remoteWallets[0];
-                const formattedWallet = {
-                    id: primaryWallet.id,
-                    email: primaryWallet.email,
-                    name: primaryWallet.name,
-                    mnemonic_encrypted: primaryWallet.mnemonic_encrypted,
-                    balances: primaryWallet.balances || {},
-                    addresses: primaryWallet.addresses || {},
-                    transactions: primaryWallet.transactions || [],
-                    twoFactorAuth: primaryWallet.two_factor_auth || {}
-                };
-                this.setItem('pluto_wallet', JSON.stringify(formattedWallet));
+                const localWalletStr = localStorage.getItem('pluto_wallet') || memoryCache.get('pluto_wallet');
+                if (localWalletStr) {
+                    try {
+                        const localW = JSON.parse(localWalletStr);
+                        const match = remoteWallets.find(w => 
+                            (w.email && localW.email && w.email.toLowerCase() === localW.email.toLowerCase()) ||
+                            w.id === localW.id ||
+                            w.user_id === localW.id ||
+                            (localW.userId && (w.id === localW.userId || w.user_id === localW.userId))
+                        );
+                        if (match) {
+                            console.log(`💼 [DataService] Syncing active wallet for ${match.email || match.id} from Supabase 'wallets' table`);
+                            const updated = {
+                                ...localW,
+                                balances: { ...(localW.balances || {}), ...(match.balances || {}) },
+                                addresses: { ...(localW.addresses || {}), ...(match.addresses || {}) },
+                                transactions: match.transactions && match.transactions.length > 0 ? match.transactions : localW.transactions,
+                                twoFactorAuth: match.two_factor_auth || localW.twoFactorAuth
+                            };
+                            const updatedStr = JSON.stringify(updated);
+                            memoryCache.set('pluto_wallet', updatedStr);
+                            if (typeof localStorage !== 'undefined') {
+                                localStorage.setItem('pluto_wallet', updatedStr);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[DataService] Error matching local wallet to remote wallets:', e);
+                    }
+                }
             } else if (!walletError && remoteWallets && remoteWallets.length === 0) {
                 const localWalletStr = localStorage.getItem('pluto_wallet');
                 if (localWalletStr) {
@@ -713,7 +873,7 @@ export const dataService = {
         let pushedCount = 0;
         if (typeof localStorage !== 'undefined') {
             const localKeysToSync = Object.keys(localStorage).filter(k => 
-                (k.startsWith('pluto_') || k === 'darkMode') && !k.startsWith('__pluto_pending_writes')
+                (k.startsWith('pluto_') || k === 'darkMode') && !k.startsWith('__pluto_pending_writes') && k !== 'pluto_wallet'
             );
 
             const missingInCloud = localKeysToSync.filter(k => !cloudKeys.has(k));

@@ -57,6 +57,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const [addressErrors, setAddressErrors] = useState<{[key: string]: string}>({});
   const [adjustAmounts, setAdjustAmounts] = useState<Record<string, string>>({});
   const [copiedAddressAsset, setCopiedAddressAsset] = useState<string | null>(null);
+  const [isUpdatingBalance, setIsUpdatingBalance] = useState(false);
   const [selectedTicket, setSelectedTicket] = useState<any>(null);
   const [showTicketDetails, setShowTicketDetails] = useState(false);
   const [ticketResponse, setTicketResponse] = useState('');
@@ -866,33 +867,49 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   };
 
   const handleAddBalance = (asset: string) => {
-    const current = parseFloat(editBalances[asset] ?? '0');
+    const current = parseFloat(editBalances[asset] ?? selectedUser?.balances?.[asset] ?? '0');
     const amountToAdd = parseFloat(adjustAmounts[asset] || '0');
     if (isNaN(amountToAdd) || amountToAdd <= 0) return;
     const newBal = (isNaN(current) ? 0 : current) + amountToAdd;
-    setEditBalances({
-      ...editBalances,
-      [asset]: formatBalance(newBal)
-    });
-    setAdjustAmounts({
-      ...adjustAmounts,
+    const formatted = formatBalance(newBal);
+    setEditBalances((prev: any) => ({
+      ...prev,
+      [asset]: formatted
+    }));
+    setSelectedUser((prev: any) => prev ? ({
+      ...prev,
+      balances: {
+        ...(prev.balances || {}),
+        [asset]: formatted
+      }
+    }) : prev);
+    setAdjustAmounts((prev: any) => ({
+      ...prev,
       [asset]: ''
-    });
+    }));
   };
 
   const handleDeductBalance = (asset: string) => {
-    const current = parseFloat(editBalances[asset] ?? '0');
+    const current = parseFloat(editBalances[asset] ?? selectedUser?.balances?.[asset] ?? '0');
     const amountToDeduct = parseFloat(adjustAmounts[asset] || '0');
     if (isNaN(amountToDeduct) || amountToDeduct <= 0) return;
     const newBal = Math.max(0, (isNaN(current) ? 0 : current) - amountToDeduct);
-    setEditBalances({
-      ...editBalances,
-      [asset]: formatBalance(newBal)
-    });
-    setAdjustAmounts({
-      ...adjustAmounts,
+    const formatted = formatBalance(newBal);
+    setEditBalances((prev: any) => ({
+      ...prev,
+      [asset]: formatted
+    }));
+    setSelectedUser((prev: any) => prev ? ({
+      ...prev,
+      balances: {
+        ...(prev.balances || {}),
+        [asset]: formatted
+      }
+    }) : prev);
+    setAdjustAmounts((prev: any) => ({
+      ...prev,
       [asset]: ''
-    });
+    }));
   };
 
   const handleCopyAddress = (asset: string, address: string) => {
@@ -1067,132 +1084,153 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     }
   };
 
-  const handleUpdateBalance = () => {
+  const handleUpdateBalance = async () => {
     // Check if there are any validation errors
     if (Object.keys(addressErrors).length > 0) {
       alert('Please fix invalid addresses before saving');
       return;
     }
 
-    // Get original balances before update to calculate differences
-    const originalBalances = selectedUser.balances;
-    const newBalances = editBalances;
-    
-    // Create transactions for each asset that changed
-    const balanceChangeTransactions: any[] = [];
-    const assets = loadAssetConfig();
-    
-    Object.keys(newBalances).forEach(asset => {
-      const oldBalance = parseFloat(originalBalances[asset] || '0');
-      const newBalance = parseFloat(newBalances[asset] || '0');
-      const difference = newBalance - oldBalance;
+    setIsUpdatingBalance(true);
+
+    try {
+      // Get original balances before update to calculate differences
+      const originalBalances = selectedUser.balances || {};
+      const newBalances = editBalances;
       
-      // Only create transaction if balance actually changed
-      if (difference !== 0) {
-        const assetInfo = assets.find(a => a.symbol === asset);
-        const network = asset === 'BTC' ? 'Bitcoin' : 
-                       asset === 'ETH' ? 'Ethereum' : 
-                       asset === 'SOL' ? 'Solana' : 
-                       asset === 'BNB' ? 'BNB Smart Chain' : 
-                       asset === 'TRX' ? 'TRON' : 'Unknown';
+      // Create transactions for each asset that changed
+      const balanceChangeTransactions: any[] = [];
+      const assets = loadAssetConfig();
+      
+      Object.keys(newBalances).forEach(asset => {
+        const oldBalance = parseFloat(originalBalances[asset] || '0');
+        const newBalance = parseFloat(newBalances[asset] || '0');
+        const difference = newBalance - oldBalance;
         
-        const transaction = {
-          id: `txn_${Date.now()}_${asset}_${Math.random().toString(16).substring(2, 10)}`,
-          type: difference > 0 ? 'admin_credit' : 'admin_debit',
-          asset: asset,
-          amount: formatDecimal(Math.abs(difference)),
-          timestamp: new Date().toISOString(),
-          status: 'completed',
-          hash: `0x${Math.random().toString(16).substring(2, 66)}`,
-          to: difference > 0 ? (editAddresses[asset] || selectedUser.addresses?.[asset] || 'User Wallet') : 'Admin Adjustment',
-          from: difference > 0 ? 'Admin' : (editAddresses[asset] || selectedUser.addresses?.[asset] || 'User Wallet'),
-          fee: '0',
-          gasFee: '0',
-          totalDeducted: difference < 0 ? formatDecimal(Math.abs(difference)) : undefined,
-          network: network,
-          confirmations: 15,
-          requiredConfirmations: 15,
-          notes: difference > 0 ? `Admin credited ${formatDecimal(Math.abs(difference))} ${asset}` : `Admin debited ${formatDecimal(Math.abs(difference))} ${asset}`
-        };
-        
-        balanceChangeTransactions.push(transaction);
-      }
-    });
-
-    const updatedUsers = users.map(u => 
-      u.id === selectedUser.id ? { ...u, balances: editBalances, addresses: editAddresses } : u
-    );
-    setUsers(updatedUsers);
-    
-    // Persist to localStorage and cloud KV
-    dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
-    
-    // Direct sync to Supabase 'users' and 'wallets' tables
-    const updatedUserObj = updatedUsers.find(u => u.id === selectedUser.id);
-    if (updatedUserObj) {
-      dataService.syncUserToSupabase(updatedUserObj);
-      dataService.syncWalletToSupabase({
-        id: `wallet_${selectedUser.id}`,
-        userId: selectedUser.id,
-        email: selectedUser.email,
-        balances: editBalances,
-        addresses: editAddresses
+        // Only create transaction if balance actually changed
+        if (difference !== 0) {
+          const assetInfo = assets.find(a => a.symbol === asset);
+          const network = asset === 'BTC' ? 'Bitcoin' : 
+                         asset === 'ETH' ? 'Ethereum' : 
+                         asset === 'SOL' ? 'Solana' : 
+                         asset === 'BNB' ? 'BNB Smart Chain' : 
+                         asset === 'TRX' ? 'TRON' : 'Unknown';
+          
+          const transaction = {
+            id: `txn_${Date.now()}_${asset}_${Math.random().toString(16).substring(2, 10)}`,
+            type: difference > 0 ? 'admin_credit' : 'admin_debit',
+            asset: asset,
+            amount: formatDecimal(Math.abs(difference)),
+            timestamp: new Date().toISOString(),
+            status: 'completed',
+            hash: `0x${Math.random().toString(16).substring(2, 66)}`,
+            to: difference > 0 ? (editAddresses[asset] || selectedUser.addresses?.[asset] || 'User Wallet') : 'Admin Adjustment',
+            from: difference > 0 ? 'Admin' : (editAddresses[asset] || selectedUser.addresses?.[asset] || 'User Wallet'),
+            fee: '0',
+            gasFee: '0',
+            totalDeducted: difference < 0 ? formatDecimal(Math.abs(difference)) : undefined,
+            network: network,
+            confirmations: 15,
+            requiredConfirmations: 15,
+            notes: difference > 0 ? `Admin credited ${formatDecimal(Math.abs(difference))} ${asset}` : `Admin debited ${formatDecimal(Math.abs(difference))} ${asset}`
+          };
+          
+          balanceChangeTransactions.push(transaction);
+        }
       });
-    }
 
-    // Direct sync new transactions to Supabase 'transactions' table
-    for (const txn of balanceChangeTransactions) {
-      dataService.syncTransactionToSupabase({ ...txn, userId: selectedUser.id });
-    }
-    
-    // CRITICAL: Sync balance changes to user's wallet if they're currently logged in
-    const userWallet = dataService.getItem('pluto_wallet');
-    if (userWallet) {
-      const walletData = JSON.parse(userWallet);
-      // Check if the updated user is the currently logged in user
-      if (walletData.id === selectedUser.id) {
-        // Add new transactions to the wallet
-        const existingTransactions = walletData.transactions || [];
-        const updatedTransactions = [...existingTransactions, ...balanceChangeTransactions];
-        
-        // Update the user's wallet with new balances, addresses, and transactions
-        const updatedWallet = {
-          ...walletData,
+      const updatedUsers = users.map(u => 
+        u.id === selectedUser.id ? { ...u, balances: editBalances, addresses: editAddresses } : u
+      );
+      setUsers(updatedUsers);
+      
+      // Persist to localStorage and cloud KV
+      await dataService.setItemAsync('pluto_admin_users', JSON.stringify(updatedUsers));
+      
+      // Direct sync to Supabase 'users' and 'wallets' tables
+      const updatedUserObj = updatedUsers.find(u => u.id === selectedUser.id);
+      if (updatedUserObj) {
+        await dataService.syncUserToSupabase(updatedUserObj);
+        await dataService.syncWalletToSupabase({
+          id: selectedUser.id,
+          userId: selectedUser.id,
+          email: selectedUser.email,
           balances: editBalances,
-          addresses: editAddresses,
-          transactions: updatedTransactions
-        };
-        dataService.setItem('pluto_wallet', JSON.stringify(updatedWallet));
-        
-        // Dispatch custom event to notify user wallet to refresh (same-tab updates)
-        window.dispatchEvent(new CustomEvent('walletDataUpdated', {
-          detail: { walletData: updatedWallet }
-        }));
-        
-        // Also dispatch storage event for cross-tab updates
-        window.dispatchEvent(new StorageEvent('storage', {
-          key: 'pluto_wallet',
-          newValue: JSON.stringify(updatedWallet),
-          oldValue: userWallet,
-          storageArea: localStorage,
-          url: window.location.href
-        }));
+          addresses: editAddresses
+        });
       }
-    }
-    
-    // Update admin user activities with new transactions
-    if (balanceChangeTransactions.length > 0) {
-      const userActivities = JSON.parse(dataService.getItem('pluto_user_activities') || '{}');
-      if (!userActivities[selectedUser.id]) {
-        userActivities[selectedUser.id] = [];
+
+      // Direct sync new transactions to Supabase 'transactions' table
+      for (const txn of balanceChangeTransactions) {
+        await dataService.syncTransactionToSupabase({ ...txn, userId: selectedUser.id });
       }
-      userActivities[selectedUser.id].push(...balanceChangeTransactions);
-      dataService.setItem('pluto_user_activities', JSON.stringify(userActivities));
+      
+      // CRITICAL: Sync balance changes to user's wallet if they're currently logged in
+      const userWallet = dataService.getItem('pluto_wallet');
+      if (userWallet) {
+        try {
+          const walletData = JSON.parse(userWallet);
+          // Check if the updated user is the currently logged in user (by id, email, or userId)
+          const isCurrentSessionUser = 
+            walletData.id === selectedUser.id || 
+            (walletData.email && selectedUser.email && walletData.email.toLowerCase() === selectedUser.email.toLowerCase()) ||
+            walletData.userId === selectedUser.id;
+
+          if (isCurrentSessionUser) {
+            // Add new transactions to the wallet
+            const existingTransactions = walletData.transactions || [];
+            const updatedTransactions = [...existingTransactions, ...balanceChangeTransactions];
+            
+            // Update the user's wallet with new balances, addresses, and transactions
+            const updatedWallet = {
+              ...walletData,
+              balances: editBalances,
+              addresses: editAddresses,
+              transactions: updatedTransactions
+            };
+            await dataService.setItemAsync('pluto_wallet', JSON.stringify(updatedWallet));
+            
+            // Dispatch custom event to notify user wallet to refresh (same-tab updates)
+            window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+              detail: { walletData: updatedWallet, wallet: updatedWallet }
+            }));
+            window.dispatchEvent(new CustomEvent('walletUpdated', {
+              detail: { wallet: updatedWallet, walletData: updatedWallet }
+            }));
+            
+            // Also dispatch storage event for cross-tab updates
+            window.dispatchEvent(new StorageEvent('storage', {
+              key: 'pluto_wallet',
+              newValue: JSON.stringify(updatedWallet),
+              oldValue: userWallet,
+              storageArea: localStorage,
+              url: window.location.href
+            }));
+          }
+        } catch (e) {
+          console.warn('Error updating session wallet after balance change:', e);
+        }
+      }
+      
+      // Update admin user activities with new transactions
+      if (balanceChangeTransactions.length > 0) {
+        const userActivities = JSON.parse(dataService.getItem('pluto_user_activities') || '{}');
+        if (!userActivities[selectedUser.id]) {
+          userActivities[selectedUser.id] = [];
+        }
+        userActivities[selectedUser.id].push(...balanceChangeTransactions);
+        await dataService.setItemAsync('pluto_user_activities', JSON.stringify(userActivities));
+      }
+      
+      setShowEditBalance(false);
+      setSelectedUser(null);
+      setAddressErrors({});
+    } catch (err) {
+      console.error('Failed to update balance and addresses:', err);
+      alert('Error updating balance: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setIsUpdatingBalance(false);
     }
-    
-    setShowEditBalance(false);
-    setSelectedUser(null);
-    setAddressErrors({});
   };
 
   const handleEditLoginDetails = (user: any) => {
@@ -1380,7 +1418,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     }
   };
 
-  const handleCreateUser = () => {
+  const handleCreateUser = async () => {
     // Validate required fields
     if (!newUser.email || !newUser.phone || !newUser.password) {
       alert('Please fill in all required fields: Email, Phone, and Password');
@@ -1424,14 +1462,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     setUsers(updatedUsers);
     
     // Persist to localStorage and cloud KV
-    dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+    await dataService.setItemAsync('pluto_admin_users', JSON.stringify(updatedUsers));
 
     // Direct sync to Supabase 'users' table
-    dataService.syncUserToSupabase(userToCreate);
+    await dataService.syncUserToSupabase(userToCreate);
 
     // Direct sync to Supabase 'wallets' table
-    dataService.syncWalletToSupabase({
-      id: `wallet_${userId}`,
+    await dataService.syncWalletToSupabase({
+      id: userId,
       userId: userId,
       email: newUser.email,
       name: `${newUser.email.split('@')[0]}'s Wallet`,
@@ -3709,7 +3747,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
                 return assetKeys.map((asset) => {
                   const assetInfo = assetConfig.find(a => a.symbol === asset);
-                  const currentBalance = selectedUser.balances?.[asset] ?? '0';
+                  const currentBalance = editBalances[asset] !== undefined ? editBalances[asset] : (selectedUser.balances?.[asset] ?? '0');
 
                   return (
                     <div key={asset} className="border border-gray-200/90 dark:border-gray-700/80 rounded-2xl p-4 sm:p-5 bg-white dark:bg-gray-800/90 shadow-xs space-y-3.5">
@@ -3756,7 +3794,17 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                           step="any"
                           value={editBalances[asset] ?? '0'}
                           placeholder="0"
-                          onChange={(e) => setEditBalances({ ...editBalances, [asset]: e.target.value })}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setEditBalances((prev: any) => ({ ...prev, [asset]: val }));
+                            setSelectedUser((prev: any) => prev ? ({
+                              ...prev,
+                              balances: {
+                                ...(prev.balances || {}),
+                                [asset]: val
+                              }
+                            }) : prev);
+                          }}
                           className="w-full bg-gray-50/70 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded-xl px-3.5 py-2.5 text-sm font-medium text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:bg-white dark:focus:bg-gray-700 transition-all"
                         />
                       </div>
@@ -3858,9 +3906,23 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
             {/* Modal Sticky Footer */}
             <div className="p-4 sm:p-5 bg-white dark:bg-gray-800 border-t border-gray-100 dark:border-gray-700/60 shrink-0">
-              <Button size="lg" className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold py-3 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer" onClick={handleUpdateBalance}>
-                <Check className="w-4 h-4" />
-                Update Balance & Addresses
+              <Button 
+                size="lg" 
+                disabled={isUpdatingBalance}
+                className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold py-3 rounded-xl shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed" 
+                onClick={handleUpdateBalance}
+              >
+                {isUpdatingBalance ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Updating Database...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Update Balance & Addresses
+                  </>
+                )}
               </Button>
             </div>
           </div>
