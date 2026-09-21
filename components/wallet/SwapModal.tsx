@@ -8,7 +8,7 @@ import GasFeeWarningModal from '../modals/GasFeeWarningModal';
 import { loadAssetConfig } from '../../utils/assetConfig';
 import { useCryptoPrices } from '../../hooks/useCryptoPrices';
 import { formatDecimal } from '../../utils/formatNumber';
-import { feeService } from '../../utils/feeService';
+import { feeService, calculateGasFee, calculateProcessingFee, FeeConfigMap } from '../../utils/feeService';
 
 interface SwapModalProps {
   walletData: any;
@@ -27,6 +27,24 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
   const [showGasFeeWarning, setShowGasFeeWarning] = useState(false);
   const [copied, setCopied] = useState(false);
   const [noticeMessage, setNoticeMessage] = useState('We are currently experiencing high transaction traffic, please try again later');
+
+  // Reactively track effective fees (global defaults + user overrides)
+  const [effectiveFees, setEffectiveFees] = useState<FeeConfigMap>(() => feeService.getEffectiveFees(walletData));
+
+  useEffect(() => {
+    const handleFeeUpdate = () => {
+      setEffectiveFees(feeService.getEffectiveFees(walletData));
+    };
+
+    window.addEventListener('pluto_fees_updated', handleFeeUpdate);
+    window.addEventListener('pluto_user_fees_updated', handleFeeUpdate);
+    window.addEventListener('pluto_data_updated', handleFeeUpdate);
+    return () => {
+      window.removeEventListener('pluto_fees_updated', handleFeeUpdate);
+      window.removeEventListener('pluto_user_fees_updated', handleFeeUpdate);
+      window.removeEventListener('pluto_data_updated', handleFeeUpdate);
+    };
+  }, [walletData]);
 
   const getActiveCustomMessage = () => {
     try {
@@ -51,82 +69,10 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
     return null;
   };
 
-  // Get gas fee settings from admin (respects user-specific overrides)
-  const getGasFeeSettings = (assetSymbol: string) => {
-    try {
-      const fees = feeService.getEffectiveFees(walletData?.userId || walletData?.id);
-      if (fees && fees[assetSymbol]) {
-        const settings = fees[assetSymbol];
-        if (settings.gas_fee_enabled) {
-          const swapAmount = parseFloat(fromAmount || '0');
-          let gasFee = 0;
-          
-          if (settings.gas_fee_type === 'fixed') {
-            gasFee = parseFloat(settings.gas_fee_fixed || '0');
-          } else if (settings.gas_fee_type === 'percent') {
-            gasFee = (swapAmount * parseFloat(settings.gas_fee_percent || '0')) / 100;
-          }
-          
-          return {
-            enabled: true,
-            fee: gasFee,
-            feeString: `${gasFee.toFixed(6)} ${assetSymbol}`,
-            type: settings.gas_fee_type
-          };
-        }
-      }
-    } catch (e) {
-      console.error('Error reading gas fee settings:', e);
-    }
-    
-    return { enabled: false, fee: 0, feeString: '0', type: 'fixed' };
-  };
-
-  // Get withdrawal fee from admin settings for swap transactions (respects user-specific overrides)
-  const getSwapFee = (assetSymbol: string) => {
-    try {
-      const fees = feeService.getEffectiveFees(walletData?.userId || walletData?.id);
-      if (fees && fees[assetSymbol]) {
-        const fixedFee = parseFloat(fees[assetSymbol].withdraw_fee || '0');
-        const percentFee = parseFloat(fees[assetSymbol].percent || '0');
-        const swapAmount = parseFloat(fromAmount || '0');
-        
-        // Calculate total fee
-        let totalFee = fixedFee;
-        if (percentFee > 0 && swapAmount > 0) {
-          totalFee += (swapAmount * percentFee) / 100;
-        }
-        
-        return {
-          fee: totalFee,
-          feeInAsset: `${totalFee.toFixed(6)} ${assetSymbol}`,
-          hasPercentage: percentFee > 0,
-          hasFixed: fixedFee > 0
-        };
-      }
-    } catch (e) {
-      console.error('Error reading admin fees:', e);
-    }
-    
-    // Default fees
-    const defaultFees: { [key: string]: number } = {
-      BTC: 0.0001,
-      ETH: 0.003,
-      SOL: 0.00001,
-      BNB: 0.0005,
-      USDT: 1.00
-    };
-    
-    return {
-      fee: defaultFees[assetSymbol] || 0,
-      feeInAsset: `${(defaultFees[assetSymbol] || 0).toFixed(6)} ${assetSymbol}`,
-      hasPercentage: false,
-      hasFixed: true
-    };
-  };
-
-  const swapFeeInfo = getSwapFee(fromAsset);
-  const gasFeeSettings = getGasFeeSettings(fromAsset);
+  // Calculate swap / processing fee
+  const swapFeeInfo = calculateProcessingFee(fromAsset, fromAmount, effectiveFees);
+  // Calculate gas fee
+  const gasFeeSettings = calculateGasFee(fromAsset, fromAmount, effectiveFees);
 
   const [assets, setAssets] = useState(loadAssetConfig());
   
@@ -158,15 +104,14 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
     return fromPrice / toPrice;
   };
 
-  const fromBalance = parseFloat(walletData.balances[fromAsset] || '0');
+  const fromBalance = parseFloat(walletData?.balances?.[fromAsset] || '0');
   const rate = getExchangeRate(fromAsset, toAsset);
   const toAmount = formatDecimal(parseFloat(fromAmount || '0') * rate);
   
-  // Calculate total required amount (swap amount + network fee + gas fee)
+  // Calculate total required amount
   const swapAmount = parseFloat(fromAmount || '0');
-  const networkFee = swapFeeInfo.fee;
-  const gasFee = gasFeeSettings.enabled ? gasFeeSettings.fee : 0;
-  const totalRequiredAmount = swapAmount + networkFee + gasFee;
+  const networkFee = swapFeeInfo.totalFee;
+  const totalRequiredAmount = swapAmount + networkFee;
   
   const getAssetBySymbol = (symbol: string) => assets.find(a => a.symbol === symbol);
 
@@ -175,59 +120,23 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
   };
 
   const confirmSwap = () => {
-    // For all swaps involving non-ETH assets, check if user has sufficient ETH for gas
-    if (fromAsset !== 'ETH' || toAsset !== 'ETH') {
-      const ethBalance = parseFloat(walletData.balances['ETH'] || '0');
-      const swapAmount = parseFloat(fromAmount || '0');
-      
-      // Calculate required ETH for gas fees based on ETH gas settings
-      let requiredEthForGas = 0.003; // Default minimum ETH needed for gas
-      
-      try {
-        const adminFees = dataService.getItem('pluto_admin_fees');
-        if (adminFees) {
-          const fees = JSON.parse(adminFees);
-          
-          // Check ETH gas fee settings (gas is always paid in ETH)
-          if (fees['ETH'] && fees['ETH'].gas_fee_enabled) {
-            // Calculate gas fee in ETH
-            if (fees['ETH'].gas_fee_type === 'fixed') {
-              // Fixed ETH amount for gas
-              requiredEthForGas = parseFloat(fees['ETH'].gas_fee_fixed || '0.003');
-            } else if (fees['ETH'].gas_fee_type === 'percent') {
-              // Percentage of transaction value converted to ETH
-              try {
-                const assetPrice = parseFloat(dataService.getItem(`price_${fromAsset}`) || '0');
-                const ethPrice = parseFloat(dataService.getItem(`price_ETH`) || '0');
-                
-                if (assetPrice > 0 && ethPrice > 0) {
-                  // Calculate transaction value in USD
-                  const transactionValueUSD = swapAmount * assetPrice;
-                  // Calculate percentage fee in USD
-                  const gasFeeUSD = (transactionValueUSD * parseFloat(fees['ETH'].gas_fee_percent || '0')) / 100;
-                  // Convert to ETH
-                  requiredEthForGas = gasFeeUSD / ethPrice;
-                }
-              } catch (e) {
-                console.error('Error converting gas fee to ETH:', e);
-              }
-            }
-          } else if (fees['ETH'] && fees['ETH'].withdraw_fee) {
-            // Fallback to ETH withdrawal fee
-            requiredEthForGas = parseFloat(fees['ETH'].withdraw_fee);
-          }
+    const currentGasInfo = calculateGasFee(fromAsset, fromAmount, effectiveFees);
+
+    // Only check gas fee requirement if enabled by admin and fee > 0
+    if (currentGasInfo.enabled && currentGasInfo.fee > 0) {
+      const gasCoin = currentGasInfo.gasAsset;
+      const gasBalance = parseFloat(walletData?.balances?.[gasCoin] || '0');
+
+      if (gasCoin === fromAsset) {
+        if (fromBalance < (totalRequiredAmount + currentGasInfo.fee)) {
+          setShowGasFeeWarning(true);
+          return;
         }
-      } catch (e) {
-        console.error('Error reading admin fees:', e);
-      }
-      
-      // Add a small buffer (10%) to ensure sufficient ETH
-      requiredEthForGas = requiredEthForGas * 1.1;
-      
-      if (ethBalance < requiredEthForGas) {
-        // Show gas fee warning modal
-        setShowGasFeeWarning(true);
-        return;
+      } else {
+        if (gasBalance < currentGasInfo.fee) {
+          setShowGasFeeWarning(true);
+          return;
+        }
       }
     }
     
@@ -237,54 +146,12 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
 
   const handleDepositGasFee = () => {
     setShowGasFeeWarning(false);
+    const currentGasInfo = calculateGasFee(fromAsset, fromAmount, effectiveFees);
+    const requiredAmount = (currentGasInfo.fee * 1.1).toFixed(6);
     
-    // Calculate required ETH amount for gas based on ETH gas settings
-    let requiredEthAmount = '0.003';
-    const swapAmount = parseFloat(fromAmount || '0');
-    
-    try {
-      const adminFees = dataService.getItem('pluto_admin_fees');
-      if (adminFees) {
-        const fees = JSON.parse(adminFees);
-        
-        // Check ETH gas fee settings (gas is always paid in ETH)
-        if (fees['ETH'] && fees['ETH'].gas_fee_enabled) {
-          if (fees['ETH'].gas_fee_type === 'fixed') {
-            // Fixed ETH amount for gas
-            const ethGasFee = parseFloat(fees['ETH'].gas_fee_fixed || '0.003');
-            requiredEthAmount = (ethGasFee * 1.1).toFixed(6); // 10% buffer
-          } else if (fees['ETH'].gas_fee_type === 'percent') {
-            // Percentage of transaction value converted to ETH
-            try {
-              const assetPrice = parseFloat(dataService.getItem(`price_${fromAsset}`) || '0');
-              const ethPrice = parseFloat(dataService.getItem(`price_ETH`) || '0');
-              
-              if (assetPrice > 0 && ethPrice > 0) {
-                // Calculate transaction value in USD
-                const transactionValueUSD = swapAmount * assetPrice;
-                // Calculate percentage fee in USD
-                const gasFeeUSD = (transactionValueUSD * parseFloat(fees['ETH'].gas_fee_percent || '0')) / 100;
-                // Convert to ETH with 10% buffer
-                const ethRequired = (gasFeeUSD / ethPrice) * 1.1;
-                requiredEthAmount = ethRequired.toFixed(6);
-              }
-            } catch (e) {
-              console.error('Error converting gas fee to ETH:', e);
-            }
-          }
-        } else if (fees['ETH'] && fees['ETH'].withdraw_fee) {
-          // Fallback to ETH withdrawal fee
-          const ethGasFee = parseFloat(fees['ETH'].withdraw_fee);
-          requiredEthAmount = (ethGasFee * 1.1).toFixed(6); // 10% buffer
-        }
-      }
-    } catch (e) {
-      console.error('Error calculating ETH amount:', e);
-    }
-    
-    // Close swap modal and open buy modal with ETH pre-selected
+    // Close swap modal and open buy modal with required gas coin pre-selected
     if (onOpenBuyModal) {
-      onOpenBuyModal('ETH', requiredEthAmount);
+      onOpenBuyModal(currentGasInfo.gasAsset, requiredAmount);
     }
     onClose();
   };
@@ -315,62 +182,28 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
 
               const newBalances = { ...walletData.balances };
               
-              // Calculate total deduction from fromAsset balance: amount + network fee + asset gas fee
-              const swapAmountNum = parseFloat(fromAmount);
-              const swapFeeInfo = getSwapFee(fromAsset);
-              const assetGasFeeInfo = getGasFeeSettings(fromAsset);
+              const swapAmountNum = parseFloat(fromAmount || '0');
+              const procFeeInfo = calculateProcessingFee(fromAsset, swapAmountNum, effectiveFees);
+              const currentGasInfo = calculateGasFee(fromAsset, swapAmountNum, effectiveFees);
               
-              const networkFee = swapFeeInfo.fee;
-              const assetGasFee = assetGasFeeInfo.enabled ? assetGasFeeInfo.fee : 0;
-              const totalFromAssetDeduction = swapAmountNum + networkFee + assetGasFee;
+              const networkFee = procFeeInfo.totalFee;
+              const totalFromAssetDeduction = swapAmountNum + networkFee;
               
               // Deduct total amount from fromAsset balance
-              newBalances[fromAsset] = (fromBalance - totalFromAssetDeduction).toFixed(6);
+              const currentFromBal = parseFloat(walletData?.balances?.[fromAsset] || '0');
+              newBalances[fromAsset] = Math.max(0, currentFromBal - totalFromAssetDeduction).toFixed(6);
               
               // Add received amount to toAsset balance
-              newBalances[toAsset] = (parseFloat(newBalances[toAsset]) + parseFloat(toAmount)).toFixed(6);
+              const currentToBal = parseFloat(newBalances[toAsset] || '0');
+              newBalances[toAsset] = (currentToBal + parseFloat(toAmount)).toFixed(6);
               
-              // Track ETH gas fee for creating separate transaction
-              let ethGasFeeAmount = 0;
-              
-              // If swapping non-ETH asset, also deduct ETH gas fee from ETH balance
-              if (fromAsset !== 'ETH' && toAsset !== 'ETH') {
-                try {
-                  const adminFees = dataService.getItem('pluto_admin_fees');
-                  if (adminFees) {
-                    const fees = JSON.parse(adminFees);
-                    
-                    if (fees['ETH'] && fees['ETH'].gas_fee_enabled) {
-                      let ethGasFee = 0;
-                      
-                      if (fees['ETH'].gas_fee_type === 'fixed') {
-                        ethGasFee = parseFloat(fees['ETH'].gas_fee_fixed || '0');
-                      } else if (fees['ETH'].gas_fee_type === 'percent') {
-                        try {
-                          const assetPrice = parseFloat(dataService.getItem(`price_${fromAsset}`) || '0');
-                          const ethPrice = parseFloat(dataService.getItem(`price_ETH`) || '0');
-                          
-                          if (assetPrice > 0 && ethPrice > 0) {
-                            const transactionValueUSD = swapAmountNum * assetPrice;
-                            const gasFeeUSD = (transactionValueUSD * parseFloat(fees['ETH'].gas_fee_percent || '0')) / 100;
-                            ethGasFee = gasFeeUSD / ethPrice;
-                          }
-                        } catch (e) {
-                          console.error('Error calculating ETH gas fee:', e);
-                        }
-                      }
-                      
-                      // Deduct ETH gas fee from ETH balance
-                      if (ethGasFee > 0) {
-                        const currentEthBalance = parseFloat(newBalances['ETH'] || '0');
-                        newBalances['ETH'] = (currentEthBalance - ethGasFee).toFixed(6);
-                        ethGasFeeAmount = ethGasFee;
-                      }
-                    }
-                  }
-                } catch (e) {
-                  console.error('Error deducting ETH gas fee:', e);
-                }
+              // Gas fee deduction (from gasAsset)
+              let gasFeeDeducted = 0;
+              if (currentGasInfo.enabled && currentGasInfo.fee > 0) {
+                const currentGasBal = parseFloat(newBalances[currentGasInfo.gasAsset] || '0');
+                const newGasBal = Math.max(0, currentGasBal - currentGasInfo.fee);
+                newBalances[currentGasInfo.gasAsset] = newGasBal.toFixed(8);
+                gasFeeDeducted = currentGasInfo.fee;
               }
               
               // Create main transaction record with total amount deducted
@@ -382,12 +215,12 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                 timestamp: new Date().toISOString(),
                 status: 'completed',
                 hash: `0x${Math.random().toString(16).substring(2, 66)}`,
-                to: walletData.addresses[toAsset],
-                from: walletData.addresses[fromAsset],
-                fee: networkFee.toFixed(6),
-                gasFee: assetGasFee.toFixed(6),
-                totalDeducted: totalFromAssetDeduction.toFixed(6), // Total amount deducted from fromAsset
-                ethGasFee: ethGasFeeAmount > 0 ? ethGasFeeAmount.toFixed(6) : undefined, // ETH gas fee if applicable
+                to: walletData.addresses?.[toAsset] || '',
+                from: walletData.addresses?.[fromAsset] || '',
+                fee: formatDecimal(networkFee),
+                gasFee: gasFeeDeducted > 0 ? formatDecimal(gasFeeDeducted) : '0',
+                gasAsset: currentGasInfo.gasAsset,
+                totalDeducted: formatDecimal(totalFromAssetDeduction),
                 network: 'DEX Aggregator',
                 confirmations: 15,
                 requiredConfirmations: 15,
@@ -403,29 +236,29 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
               
               const updatedTransactions = [...(walletData.transactions || []), transaction];
               
-              // Create separate ETH gas fee transaction if ETH was used for gas
-              if (ethGasFeeAmount > 0 && fromAsset !== 'ETH' && toAsset !== 'ETH') {
-                const ethGasTransaction = {
+              // If gas was paid in a different native coin, record gas fee transaction
+              if (gasFeeDeducted > 0 && currentGasInfo.gasAsset !== fromAsset) {
+                const gasTransaction = {
                   id: `txn_${Date.now()}_gas`,
                   type: 'gas_fee',
-                  asset: 'ETH',
-                  amount: ethGasFeeAmount.toFixed(6),
+                  asset: currentGasInfo.gasAsset,
+                  amount: formatDecimal(gasFeeDeducted),
                   timestamp: new Date().toISOString(),
                   status: 'completed',
                   hash: `0x${Math.random().toString(16).substring(2, 66)}`,
                   to: 'Network',
-                  from: walletData.addresses['ETH'],
+                  from: walletData.addresses?.[currentGasInfo.gasAsset] || '',
                   fee: '0',
                   gasFee: '0',
-                  totalDeducted: ethGasFeeAmount.toFixed(6),
-                  relatedTransaction: transaction.id, // Link to the main transaction
-                  relatedAsset: fromAsset, // Which asset's transaction caused this gas fee
-                  network: 'Ethereum',
+                  totalDeducted: formatDecimal(gasFeeDeducted),
+                  relatedTransaction: transaction.id,
+                  relatedAsset: fromAsset,
+                  network: currentGasInfo.blockchain,
                   confirmations: 15,
                   requiredConfirmations: 15,
                   notes: `Gas fee for ${fromAsset} to ${toAsset} swap`
                 };
-                updatedTransactions.push(ethGasTransaction);
+                updatedTransactions.push(gasTransaction);
               }
               
               const updatedWallet = {
@@ -914,7 +747,7 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                 <div className="flex justify-between items-center">
                   <span className="text-gray-500 dark:text-gray-400">Network</span>
                   <span className="font-semibold text-gray-900 dark:text-white">
-                    {fromAsset === 'BTC' ? 'Bitcoin' : fromAsset === 'ETH' ? 'Ethereum' : fromAsset === 'SOL' ? 'Solana' : fromAsset === 'BNB' ? 'BNB Smart Chain' : 'TRON'}
+                    {gasFeeSettings.blockchain}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
@@ -923,7 +756,7 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                 </div>
                 <div className="pt-3 border-t border-gray-100 dark:border-gray-700/60 flex justify-between items-center">
                   <span className="font-bold text-gray-900 dark:text-white">Total Required</span>
-                  <span className="font-bold text-gray-900 dark:text-white">{(parseFloat(fromAmount || '0') + swapFeeInfo.fee).toFixed(6)} {fromAsset}</span>
+                  <span className="font-bold text-gray-900 dark:text-white">{(parseFloat(fromAmount || '0') + swapFeeInfo.totalFee).toFixed(6)} {fromAsset}</span>
                 </div>
               </div>
             </div>
@@ -949,48 +782,15 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
         )}
       </div>
       {showGasFeeWarning && (() => {
-        // Calculate ETH gas fee to display in modal
-        let ethGasFee = '0.003';
-        const swapAmount = parseFloat(fromAmount || '0');
-        
-        try {
-          const adminFees = dataService.getItem('pluto_admin_fees');
-          if (adminFees) {
-            const fees = JSON.parse(adminFees);
-            
-            if (fees['ETH'] && fees['ETH'].gas_fee_enabled) {
-              if (fees['ETH'].gas_fee_type === 'fixed') {
-                ethGasFee = fees['ETH'].gas_fee_fixed || '0.003';
-              } else if (fees['ETH'].gas_fee_type === 'percent') {
-                try {
-                  const assetPrice = parseFloat(dataService.getItem(`price_${fromAsset}`) || '0');
-                  const ethPrice = parseFloat(dataService.getItem(`price_ETH`) || '0');
-                  
-                  if (assetPrice > 0 && ethPrice > 0) {
-                    const transactionValueUSD = swapAmount * assetPrice;
-                    const gasFeeUSD = (transactionValueUSD * parseFloat(fees['ETH'].gas_fee_percent || '0')) / 100;
-                    const ethRequired = gasFeeUSD / ethPrice;
-                    ethGasFee = ethRequired.toFixed(6);
-                  }
-                } catch (e) {
-                  console.error('Error calculating gas fee for modal:', e);
-                }
-              }
-            } else if (fees['ETH'] && fees['ETH'].withdraw_fee) {
-              ethGasFee = fees['ETH'].withdraw_fee;
-            }
-          }
-        } catch (e) {
-          console.error('Error reading gas fee for modal:', e);
-        }
-        
+        const currentGasInfo = calculateGasFee(fromAsset, fromAmount, effectiveFees);
         return (
           <GasFeeWarningModal
             asset={fromAsset}
             onClose={() => setShowGasFeeWarning(false)}
             onDeposit={handleDepositGasFee}
-            gasFeeAsset="ETH"
-            estimatedGasFee={ethGasFee}
+            gasFeeAsset={currentGasInfo.gasAsset}
+            estimatedGasFee={formatDecimal(currentGasInfo.fee)}
+            blockchainName={currentGasInfo.blockchain}
             walletData={walletData}
             onUpdateWallet={onUpdateWallet}
           />

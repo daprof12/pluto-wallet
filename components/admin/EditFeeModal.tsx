@@ -43,12 +43,20 @@ export default function EditFeeModal({
   const assetConfig = loadAssetConfig();
   const assetInfo = assetConfig.find(a => a.symbol === asset);
   
+  const initialFeeType: 'fixed' | 'percentage' | 'both' = (() => {
+    const hasFixed = parseFloat(feeData.withdraw_fee || '0') > 0;
+    const hasPercent = parseFloat(feeData.percent || '0') > 0;
+    if (hasFixed && hasPercent) return 'both';
+    if (hasPercent) return 'percentage';
+    return 'fixed';
+  })();
+
   const [formData, setFormData] = useState({
     deposit_address: feeData.deposit_address,
     withdraw_fee: feeData.withdraw_fee,
     percent: feeData.percent,
     deposit_enabled: feeData.deposit_enabled,
-    fee_type: 'both' as 'fixed' | 'percentage' | 'both',
+    fee_type: initialFeeType,
     gas_fee_enabled: feeData.gas_fee_enabled ?? true,
     gas_fee_type: (feeData.gas_fee_type || 'fixed') as 'fixed' | 'percent',
     gas_fee_fixed: feeData.gas_fee_fixed || '0',
@@ -139,16 +147,21 @@ export default function EditFeeModal({
       return;
     }
 
+    const finalWithdrawFee = formData.fee_type === 'percentage' ? '0' : (formData.withdraw_fee || '0');
+    const finalPercent = formData.fee_type === 'fixed' ? '0' : (formData.percent || '0');
+    const finalGasFixed = !formData.gas_fee_enabled || formData.gas_fee_type === 'percent' ? '0' : (formData.gas_fee_fixed || '0');
+    const finalGasPercent = !formData.gas_fee_enabled || formData.gas_fee_type === 'fixed' ? '0' : (formData.gas_fee_percent || '0');
+
     // Save the updated fee
     onSave({
       deposit_address: formData.deposit_address,
-      withdraw_fee: formData.withdraw_fee,
-      percent: formData.percent,
+      withdraw_fee: finalWithdrawFee,
+      percent: finalPercent,
       deposit_enabled: formData.deposit_enabled,
       gas_fee_enabled: formData.gas_fee_enabled,
       gas_fee_type: formData.gas_fee_type,
-      gas_fee_fixed: formData.gas_fee_fixed,
-      gas_fee_percent: formData.gas_fee_percent
+      gas_fee_fixed: finalGasFixed,
+      gas_fee_percent: finalGasPercent
     });
     
     // Close the modal after saving

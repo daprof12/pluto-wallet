@@ -469,13 +469,6 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     }
   }, [selectedFeeUserId]);
 
-  // Persist global fees whenever they change in global scope
-  useEffect(() => {
-    if (selectedFeeUserId === 'global') {
-      feeService.saveGlobalFees(fees);
-    }
-  }, [fees, selectedFeeUserId]);
-
   // Load user activities from localStorage or use default mock data
   const loadUserActivities = () => {
     const storedActivities = dataService.getItem('pluto_user_activities');

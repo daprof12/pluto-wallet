@@ -50,13 +50,20 @@ export default function GasFeeDepositModal({
     ETH: 2280.50,
     SOL: 98.75,
     BNB: 315.20,
-    USDT: 1.00
+    USDT: 1.00,
+    TRX: 0.15,
+    AVAX: 35.00,
+    MATIC: 0.85,
+    DOGE: 0.12,
+    ADA: 0.50,
+    XRP: 0.55
   };
 
   // Set USD amount based on estimated gas fee
   useEffect(() => {
-    const cryptoAmount = parseFloat(estimatedGasFee);
-    const usdValue = (cryptoAmount * prices[gasFeeAsset]).toFixed(2);
+    const cryptoAmount = parseFloat(estimatedGasFee) || 0;
+    const price = prices[gasFeeAsset] || 1;
+    const usdValue = (cryptoAmount * price).toFixed(2);
     setUsdAmount(usdValue);
   }, [estimatedGasFee, gasFeeAsset]);
 

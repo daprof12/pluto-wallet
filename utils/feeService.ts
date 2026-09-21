@@ -1,5 +1,7 @@
 import dataService from './dataService';
 import { loadAssetConfig, AssetConfig } from './assetConfig';
+import { formatDecimal } from './formatNumber';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 export interface AssetFeeConfig {
   withdraw_fee: string;
@@ -21,6 +23,155 @@ export interface UserFeeOverride {
   enabled: boolean; // whether custom fees override global defaults
   fees: FeeConfigMap;
   updatedAt: string;
+}
+
+export interface ChainGasInfo {
+  blockchain: string;
+  gasAsset: string;
+  isToken: boolean;
+}
+
+/**
+ * Returns native blockchain and gas coin for any given cryptocurrency asset
+ */
+export function getChainGasInfo(assetSymbol: string): ChainGasInfo {
+  const symbol = (assetSymbol || '').toUpperCase();
+
+  // Ethereum ecosystem (ERC-20 tokens)
+  if (symbol === 'USDT_ERC20' || symbol === 'USDC' || symbol === 'LINK' || symbol === 'SHIB') {
+    return { blockchain: 'Ethereum (ERC-20)', gasAsset: 'ETH', isToken: true };
+  }
+  // BNB Smart Chain (BEP-20 tokens)
+  if (symbol === 'USDT_BEP20') {
+    return { blockchain: 'BNB Smart Chain (BEP-20)', gasAsset: 'BNB', isToken: true };
+  }
+  // TRON ecosystem (TRC-20 tokens)
+  if (symbol === 'USDT' || symbol === 'USDT_TRC20') {
+    return { blockchain: 'TRON (TRC-20)', gasAsset: 'TRX', isToken: true };
+  }
+  // Native layer-1 coins
+  if (symbol === 'ETH') {
+    return { blockchain: 'Ethereum', gasAsset: 'ETH', isToken: false };
+  }
+  if (symbol === 'BNB') {
+    return { blockchain: 'BNB Smart Chain', gasAsset: 'BNB', isToken: false };
+  }
+  if (symbol === 'SOL') {
+    return { blockchain: 'Solana', gasAsset: 'SOL', isToken: false };
+  }
+  if (symbol === 'BTC') {
+    return { blockchain: 'Bitcoin', gasAsset: 'BTC', isToken: false };
+  }
+  if (symbol === 'TRX') {
+    return { blockchain: 'TRON', gasAsset: 'TRX', isToken: false };
+  }
+  if (symbol === 'AVAX') {
+    return { blockchain: 'Avalanche C-Chain', gasAsset: 'AVAX', isToken: false };
+  }
+  if (symbol === 'MATIC') {
+    return { blockchain: 'Polygon', gasAsset: 'MATIC', isToken: false };
+  }
+  if (symbol === 'TON') {
+    return { blockchain: 'The Open Network', gasAsset: 'TON', isToken: false };
+  }
+  if (symbol === 'DOGE') {
+    return { blockchain: 'Dogecoin', gasAsset: 'DOGE', isToken: false };
+  }
+  if (symbol === 'ADA') {
+    return { blockchain: 'Cardano', gasAsset: 'ADA', isToken: false };
+  }
+  if (symbol === 'XRP') {
+    return { blockchain: 'XRP Ledger', gasAsset: 'XRP', isToken: false };
+  }
+
+  return { blockchain: 'Network', gasAsset: assetSymbol, isToken: false };
+}
+
+/**
+ * Calculates accurate gas fee amount, gas asset, and blockchain for any transaction
+ */
+export function calculateGasFee(
+  assetSymbol: string,
+  amount: number | string,
+  effectiveFees: FeeConfigMap
+): {
+  enabled: boolean;
+  fee: number;
+  gasAsset: string;
+  blockchain: string;
+  type: 'fixed' | 'percent';
+  feeString: string;
+} {
+  const symbol = (assetSymbol || '').toUpperCase();
+  const chainInfo = getChainGasInfo(symbol);
+  const settings = effectiveFees[symbol] || getDefaultFeeForAsset(symbol);
+
+  if (!settings || !settings.gas_fee_enabled) {
+    return {
+      enabled: false,
+      fee: 0,
+      gasAsset: chainInfo.gasAsset,
+      blockchain: chainInfo.blockchain,
+      type: settings?.gas_fee_type || 'fixed',
+      feeString: `0 ${chainInfo.gasAsset}`
+    };
+  }
+
+  const numAmount = parseFloat(String(amount || '0'));
+  let fee = 0;
+
+  if (settings.gas_fee_type === 'percent') {
+    const percent = parseFloat(settings.gas_fee_percent || '0');
+    fee = (numAmount * percent) / 100;
+  } else {
+    fee = parseFloat(settings.gas_fee_fixed || '0');
+  }
+
+  return {
+    enabled: true,
+    fee,
+    gasAsset: chainInfo.gasAsset,
+    blockchain: chainInfo.blockchain,
+    type: settings.gas_fee_type || 'fixed',
+    feeString: `${fee > 0 ? formatDecimal(fee) : '0'} ${chainInfo.gasAsset}`
+  };
+}
+
+/**
+ * Calculates processing / withdrawal fee (fixed + percentage) in the sent asset
+ */
+export function calculateProcessingFee(
+  assetSymbol: string,
+  amount: number | string,
+  effectiveFees: FeeConfigMap
+): {
+  fixedFee: number;
+  percentFee: number;
+  totalFee: number;
+  feeInAsset: string;
+  hasPercentage: boolean;
+  hasFixed: boolean;
+} {
+  const symbol = (assetSymbol || '').toUpperCase();
+  const settings = effectiveFees[symbol] || getDefaultFeeForAsset(symbol);
+
+  const fixedFee = parseFloat(settings?.withdraw_fee || '0');
+  const percentFee = parseFloat(settings?.percent || '0');
+  const numAmount = parseFloat(String(amount || '0'));
+
+  let totalFee = fixedFee;
+  if (percentFee > 0 && numAmount > 0) {
+    totalFee += (numAmount * percentFee) / 100;
+  }
+
+  return {
+    fixedFee,
+    percentFee,
+    totalFee,
+    feeInAsset: `${formatDecimal(totalFee)} ${symbol}`,
+    hasPercentage: percentFee > 0,
+    hasFixed: fixedFee > 0
+  };
 }
 
 const GLOBAL_FEES_STORAGE_KEY = 'pluto_admin_fees';
@@ -273,34 +424,114 @@ export const feeService = {
   /**
    * Save global fees and notify listeners
    */
-  saveGlobalFees(fees: FeeConfigMap): void {
+  async saveGlobalFees(fees: FeeConfigMap): Promise<void> {
     dataService.setItem(GLOBAL_FEES_STORAGE_KEY, JSON.stringify(fees));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('pluto_fees_updated', { detail: { fees } }));
     }
+
+    // Sync to Supabase admin_fee_settings table
+    try {
+      if (isSupabaseConfigured()) {
+        const rows = Object.entries(fees).map(([asset, config]) => ({
+          asset_symbol: asset,
+          withdraw_fee: config.withdraw_fee || '0',
+          percent: config.percent || '0',
+          deposit_address: config.deposit_address || '',
+          deposit_enabled: config.deposit_enabled ?? true,
+          gas_fee_enabled: config.gas_fee_enabled ?? false,
+          gas_fee_type: config.gas_fee_type || 'fixed',
+          gas_fee_fixed: config.gas_fee_fixed || '0',
+          gas_fee_percent: config.gas_fee_percent || '0',
+          updated_at: new Date().toISOString()
+        }));
+
+        for (const row of rows) {
+          await supabase.from('admin_fee_settings').upsert(row, { onConflict: 'asset_symbol' });
+        }
+      }
+    } catch (e) {
+      console.warn('[FeeService] Error syncing fees to Supabase:', e);
+    }
   },
 
   /**
-   * Get custom fee override for a specific user
+   * Get custom fee override for a specific user.
+   * Resiliently matches by userId, userEmail, or walletId.
    */
-  getUserFeeOverride(userId: string): UserFeeOverride | null {
-    if (!userId) return null;
-    try {
-      const key = `pluto_user_fees_${userId}`;
-      const raw = dataService.getItem(key);
-      if (raw) {
-        return JSON.parse(raw);
+  getUserFeeOverride(identifier?: any, fallbackEmail?: string): UserFeeOverride | null {
+    if (!identifier) return null;
+
+    let targetId = typeof identifier === 'string' ? identifier : (identifier.userId || identifier.id);
+    let targetEmail = typeof identifier === 'object' ? (identifier.email || fallbackEmail) : fallbackEmail;
+
+    // Helper to find override for a single candidate string
+    const findForCandidate = (cand?: string): UserFeeOverride | null => {
+      if (!cand) return null;
+      try {
+        // 1. Direct match by key
+        const key = `pluto_user_fees_${cand}`;
+        const raw = dataService.getItem(key);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed.enabled) return parsed;
+        }
+
+        // 2. Search registry by userId or userEmail
+        const registry = this.getAllUserFeeOverrides();
+        for (const [id, entry] of Object.entries(registry)) {
+          if (
+            (id === cand ||
+              entry.userId === cand ||
+              (entry.userEmail && entry.userEmail.toLowerCase() === cand.toLowerCase())) &&
+            entry.enabled
+          ) {
+            const entryRaw = dataService.getItem(`pluto_user_fees_${id}`);
+            if (entryRaw) {
+              const parsed = JSON.parse(entryRaw);
+              if (parsed.enabled) return parsed;
+            }
+          }
+        }
+
+        // 3. Fallback: match from pluto_admin_users list
+        const rawUsers = dataService.getItem('pluto_admin_users');
+        if (rawUsers) {
+          const users = JSON.parse(rawUsers);
+          const user = users.find(
+            (u: any) =>
+              u.id === cand ||
+              (u.email && u.email.toLowerCase() === cand.toLowerCase())
+          );
+          if (user && user.id !== cand) {
+            const userRaw = dataService.getItem(`pluto_user_fees_${user.id}`);
+            if (userRaw) {
+              const parsed = JSON.parse(userRaw);
+              if (parsed.enabled) return parsed;
+            }
+          }
+        }
+      } catch (e) {
+        console.error(`Error reading user fees for ${cand}:`, e);
       }
-    } catch (e) {
-      console.error(`Error reading user fees for ${userId}:`, e);
+      return null;
+    };
+
+    const matchById = findForCandidate(targetId);
+    if (matchById) return matchById;
+
+    if (targetEmail && targetEmail !== targetId) {
+      const matchByEmail = findForCandidate(targetEmail);
+      if (matchByEmail) return matchByEmail;
     }
+
     return null;
   },
 
   /**
    * Save custom fee override for a specific user
    */
-  saveUserFeeOverride(override: UserFeeOverride): void {
+  async saveUserFeeOverride(override: UserFeeOverride): Promise<void> {
     if (!override.userId) return;
     const key = `pluto_user_fees_${override.userId}`;
     dataService.setItem(key, JSON.stringify(override));
@@ -323,6 +554,21 @@ export const feeService = {
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('pluto_user_fees_updated', { detail: { override } }));
+    }
+
+    // Sync to Supabase users table (user_restriction metadata)
+    try {
+      if (isSupabaseConfigured()) {
+        await supabase
+          .from('users')
+          .update({
+            user_restriction: { fee_override: override },
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', override.userId);
+      }
+    } catch (e) {
+      console.warn('[FeeService] Error syncing user fee override to Supabase:', e);
     }
   },
 
@@ -370,11 +616,11 @@ export const feeService = {
    * If userId has custom fees enabled, user-specific fees override global defaults.
    * Otherwise, returns global fees.
    */
-  getEffectiveFees(userId?: string): FeeConfigMap {
+  getEffectiveFees(userOrId?: any, fallbackEmail?: string): FeeConfigMap {
     const globalFees = this.getGlobalFees();
-    if (!userId) return globalFees;
+    if (!userOrId) return globalFees;
 
-    const userOverride = this.getUserFeeOverride(userId);
+    const userOverride = this.getUserFeeOverride(userOrId, fallbackEmail);
     if (!userOverride || !userOverride.enabled) {
       return globalFees;
     }

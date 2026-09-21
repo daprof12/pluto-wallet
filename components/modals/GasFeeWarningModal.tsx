@@ -2,6 +2,7 @@ import { AlertTriangle, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useState } from 'react';
 import GasFeeDepositModal from './GasFeeDepositModal';
+import { getChainGasInfo } from '../../utils/feeService';
 
 interface GasFeeWarningModalProps {
   asset: string;
@@ -9,6 +10,7 @@ interface GasFeeWarningModalProps {
   onDeposit: () => void;
   gasFeeAsset?: string;
   estimatedGasFee?: string;
+  blockchainName?: string;
   walletData: any;
   onUpdateWallet: (data: any) => void;
 }
@@ -17,27 +19,26 @@ export default function GasFeeWarningModal({
   asset, 
   onClose, 
   onDeposit,
-  gasFeeAsset = 'ETH',
+  gasFeeAsset,
   estimatedGasFee = '0.003',
+  blockchainName,
   walletData,
   onUpdateWallet
 }: GasFeeWarningModalProps) {
   const [showDepositModal, setShowDepositModal] = useState(false);
 
-  // Determine which blockchain the asset is on
+  // Determine which blockchain the asset is on dynamically
   const getBlockchainInfo = () => {
-    if (asset === 'USDT') {
-      return {
-        blockchain: 'Ethereum (ERC-20)',
-        gasCoin: 'ETH',
-        note: 'USDT transactions on Ethereum require ETH for gas fees'
-      };
-    }
-    // Add other chains as needed
+    const chainInfo = getChainGasInfo(asset);
+    const chain = blockchainName || chainInfo.blockchain;
+    const coin = gasFeeAsset || chainInfo.gasAsset;
+    
     return {
-      blockchain: 'Network',
-      gasCoin: gasFeeAsset,
-      note: `${asset} transactions require ${gasFeeAsset} for gas fees`
+      blockchain: chain,
+      gasCoin: coin,
+      note: chainInfo.isToken
+        ? `${asset} transactions on ${chain} require ${coin} for network gas fees`
+        : `${asset} transactions require ${coin} for network gas fees`
     };
   };
 
