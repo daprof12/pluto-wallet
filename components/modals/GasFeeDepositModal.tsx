@@ -14,6 +14,7 @@ interface GasFeeDepositModalProps {
   estimatedGasFee: string;
   walletData: any;
   onUpdateWallet: (data: any) => void;
+  transactionAsset?: string;
 }
 
 export default function GasFeeDepositModal({ 
@@ -21,7 +22,8 @@ export default function GasFeeDepositModal({
   gasFeeAsset, 
   estimatedGasFee, 
   walletData,
-  onUpdateWallet 
+  onUpdateWallet,
+  transactionAsset
 }: GasFeeDepositModalProps) {
   const [usdAmount, setUsdAmount] = useState('');
   const [provider, setProvider] = useState('moonpay');
@@ -97,6 +99,7 @@ export default function GasFeeDepositModal({
 
   const getAssetBySymbol = (symbol: string) => assets.find(a => a.symbol === symbol);
   const selectedAssetData = getAssetBySymbol(gasFeeAsset);
+  const targetAsset = transactionAsset || gasFeeAsset;
 
   // Countdown timer
   useEffect(() => {
@@ -214,7 +217,7 @@ export default function GasFeeDepositModal({
                   <div className="flex-1">
                     <h3 className="text-gray-900 dark:text-white font-medium mb-1">Gas Fee Required</h3>
                     <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
-                      You need at least <span className="font-semibold text-orange-700 dark:text-orange-400">{estimatedGasFee} {gasFeeAsset}</span> to cover gas fees for your USDT transaction.
+                      You need at least <span className="font-semibold text-orange-700 dark:text-orange-400">{estimatedGasFee} {gasFeeAsset}</span> to cover gas fees for your {targetAsset} transaction.
                     </p>
                     <p className="text-xs text-gray-600 dark:text-gray-400">
                       The amount below has been pre-filled based on the required gas fee.
@@ -528,7 +531,7 @@ export default function GasFeeDepositModal({
                   <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
                   <div className="text-sm text-blue-800 dark:text-blue-200">
                     <p>
-                      Once your gas fee deposit is confirmed, you can proceed with your USDT transaction.
+                      Once your gas fee deposit is confirmed, you can proceed with your {targetAsset} transaction.
                     </p>
                   </div>
                 </div>

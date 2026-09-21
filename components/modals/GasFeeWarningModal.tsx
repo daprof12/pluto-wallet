@@ -125,6 +125,7 @@ export default function GasFeeWarningModal({
       {/* Deposit Modal */}
       {showDepositModal && (
         <GasFeeDepositModal
+          transactionAsset={asset}
           gasFeeAsset={blockchainInfo.gasCoin}
           estimatedGasFee={estimatedGasFee}
           onClose={() => {
