@@ -4,15 +4,19 @@
  * ============================================================================
  * 
  * Primary storage: Supabase Database (cloud, cross-device sync)
+ * Tables supported:
+ * - `users`: Direct relational user profiles, balances, KYC, addresses
+ * - `wallets`: Direct user wallet records
+ * - `transactions`: Direct transaction records
+ * - `pluto_kv_store` & `kv_store`: Complete synchronized application state
  * Cache & Offline storage: In-memory cache + localStorage (fast reads, offline support)
  * 
  * Strategy:
- * - WRITE: Write to Supabase cloud, and instantly update in-memory cache & localStorage
+ * - WRITE: Write directly to Supabase tables and KV store, instantly update cache & localStorage
  * - READ: Ultra-fast read from in-memory cache / localStorage, synced from cloud on init
  * - REALTIME: Supabase Realtime subscription listens for changes across sessions/devices
  * - OFFLINE: Automatically queues writes if offline and syncs them once reconnected
  * - INIT: On app start, initCloudSync() synchronizes all database data
- * 
  * ============================================================================
  */
 
@@ -54,7 +58,6 @@ function getPendingWrites(): Array<{ key: string; value: string | null; action: 
 
 function addPendingWrite(key: string, value: string | null, action: 'set' | 'remove') {
     const pending = getPendingWrites();
-    // Remove any existing pending write for this key (latest wins)
     const filtered = pending.filter(p => p.key !== key);
     filtered.push({ key, value, action });
     localStorage.setItem(PENDING_WRITES_KEY, JSON.stringify(filtered));
@@ -130,7 +133,6 @@ async function writeToSupabase(key: string, value: string): Promise<boolean> {
             .upsert({ key, value: parsed });
 
         if (error) {
-            // Check if table missing
             if (error.code === 'PGRST205') {
                 console.warn(`[DataService] Table '${activeTable}' not found. Please run supabase/setup_database.sql in Supabase SQL editor.`);
             } else {
@@ -201,14 +203,13 @@ function setupRealtimeSubscription() {
     if (isRealtimeSubscribed || !isSupabaseConfigured() || typeof window === 'undefined') return;
 
     try {
-        const channel = supabase
+        // 1. Channel for KV store state
+        supabase
             .channel('pluto_db_sync')
             .on(
                 'postgres_changes',
                 { event: '*', schema: 'public', table: activeTable },
                 (payload: any) => {
-                    console.log(`[DataService] Realtime DB event [${payload.eventType}] on ${payload.table}:`, payload);
-                    
                     if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
                         const newKey = payload.new?.key;
                         const newValue = payload.new?.value;
@@ -217,12 +218,10 @@ function setupRealtimeSubscription() {
                             memoryCache.set(newKey, stringVal);
                             localStorage.setItem(newKey, stringVal);
 
-                            // Dispatch generic event
                             window.dispatchEvent(new CustomEvent('pluto_data_updated', {
                                 detail: { key: newKey, value: newValue }
                             }));
 
-                            // Specific event for wallet
                             if (newKey === 'pluto_wallet') {
                                 window.dispatchEvent(new CustomEvent('walletDataUpdated', {
                                     detail: { walletData: newValue }
@@ -241,9 +240,66 @@ function setupRealtimeSubscription() {
                     }
                 }
             )
+            .subscribe();
+
+        // 2. Channel for direct 'users' table updates
+        supabase
+            .channel('pluto_users_sync')
+            .on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table: 'users' },
+                (payload: any) => {
+                    console.log(`[DataService] Realtime users table event [${payload.eventType}]:`, payload);
+                    if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+                        const updatedUser = payload.new;
+                        if (updatedUser?.id) {
+                            const rawUsers = dataService.getItem('pluto_admin_users');
+                            let currentUsers: any[] = rawUsers ? JSON.parse(rawUsers) : [];
+                            const idx = currentUsers.findIndex(u => u.id === updatedUser.id || u.email === updatedUser.email);
+                            const mapped = {
+                                id: updatedUser.id,
+                                email: updatedUser.email,
+                                phone: updatedUser.phone || '',
+                                fullName: updatedUser.full_name || '',
+                                password: updatedUser.password || '',
+                                kyc_status: updatedUser.kyc_status || 'pending',
+                                kyc_data: updatedUser.kyc_data || null,
+                                balances: updatedUser.balances || {},
+                                addresses: updatedUser.addresses || {},
+                                blocked: !!updatedUser.blocked,
+                                is_admin: !!updatedUser.is_admin,
+                                twoFactorAuth: updatedUser.two_factor_auth || {},
+                                user_restriction: updatedUser.user_restriction || {},
+                                last_login: updatedUser.last_login || updatedUser.created_at,
+                                created_at: updatedUser.created_at
+                            };
+                            if (idx >= 0) {
+                                currentUsers[idx] = { ...currentUsers[idx], ...mapped };
+                            } else {
+                                currentUsers.push(mapped);
+                            }
+                            dataService.setItem('pluto_admin_users', JSON.stringify(currentUsers));
+                            window.dispatchEvent(new CustomEvent('pluto_users_updated', {
+                                detail: { users: currentUsers }
+                            }));
+                        }
+                    } else if (payload.eventType === 'DELETE') {
+                        const deletedId = payload.old?.id;
+                        if (deletedId) {
+                            const rawUsers = dataService.getItem('pluto_admin_users');
+                            let currentUsers: any[] = rawUsers ? JSON.parse(rawUsers) : [];
+                            currentUsers = currentUsers.filter(u => u.id !== deletedId);
+                            dataService.setItem('pluto_admin_users', JSON.stringify(currentUsers));
+                            window.dispatchEvent(new CustomEvent('pluto_users_updated', {
+                                detail: { users: currentUsers }
+                            }));
+                        }
+                    }
+                }
+            )
             .subscribe((status: string) => {
                 if (status === 'SUBSCRIBED') {
-                    console.log(`[DataService] Supabase Realtime active on '${activeTable}'`);
+                    console.log(`[DataService] Supabase Realtime active on 'users' table`);
                     isRealtimeSubscribed = true;
                 }
             });
@@ -287,6 +343,26 @@ export const dataService = {
                     addPendingWrite(key, value, 'set');
                 }
             });
+
+            // If updating admin users, automatically sync each user to 'users' table
+            if (key === 'pluto_admin_users') {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (Array.isArray(parsed)) {
+                        parsed.forEach(u => this.syncUserToSupabase(u));
+                    }
+                } catch {}
+            }
+
+            // If updating active wallet, automatically sync to 'wallets' table
+            if (key === 'pluto_wallet') {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (parsed && (parsed.id || parsed.email)) {
+                        this.syncWalletToSupabase(parsed);
+                    }
+                } catch {}
+            }
         } else {
             addPendingWrite(key, value, 'set');
         }
@@ -343,17 +419,173 @@ export const dataService = {
             if (!success) {
                 addPendingWrite(key, value, 'set');
             }
+
+            // If updating admin users, automatically sync each user to 'users' table
+            if (key === 'pluto_admin_users') {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (Array.isArray(parsed)) {
+                        await Promise.all(parsed.map(u => this.syncUserToSupabase(u)));
+                    }
+                } catch {}
+            }
+
+            // If updating active wallet, automatically sync to 'wallets' table
+            if (key === 'pluto_wallet') {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (parsed && (parsed.id || parsed.email)) {
+                        await this.syncWalletToSupabase(parsed);
+                    }
+                } catch {}
+            }
         } else {
             addPendingWrite(key, value, 'set');
         }
     },
 
     /**
+     * Synchronize a specific user directly to the Supabase 'users' table
+     */
+    async syncUserToSupabase(user: any): Promise<boolean> {
+        if (!isSupabaseConfigured()) return false;
+
+        try {
+            const userRow = {
+                id: user.id || `usr_${Date.now()}`,
+                email: user.email,
+                phone: user.phone || null,
+                full_name: user.fullName || user.email?.split('@')[0] || 'User',
+                password: user.password || '',
+                kyc_status: user.kyc_status || 'pending',
+                kyc_data: user.kyc_data || {},
+                balances: user.balances || { BTC: '0', ETH: '0', SOL: '0', BNB: '0', USDT: '0' },
+                addresses: user.addresses || {},
+                blocked: !!user.blocked,
+                is_admin: !!user.is_admin,
+                two_factor_auth: user.twoFactorAuth || {},
+                user_restriction: user.user_restriction || {},
+                last_login: user.last_login || new Date().toISOString(),
+                created_at: user.created_at || new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            };
+
+            const { error } = await supabase.from('users').upsert(userRow);
+            if (error) {
+                if (error.code === 'PGRST205') {
+                    console.warn(`[DataService] Supabase table 'users' does not exist yet. Please run 'supabase/setup_database.sql'.`);
+                } else {
+                    console.warn('[DataService] Failed to upsert to users table:', error.message);
+                }
+                return false;
+            }
+            console.log(`✅ [DataService] Synced user ${user.email} directly to Supabase 'users' table`);
+            return true;
+        } catch (err) {
+            console.warn('[DataService] syncUserToSupabase error:', err);
+            return false;
+        }
+    },
+
+    /**
+     * Delete user directly from Supabase 'users' table
+     */
+    async deleteUserFromSupabase(userId: string): Promise<boolean> {
+        if (!isSupabaseConfigured()) return false;
+        try {
+            const { error } = await supabase.from('users').delete().eq('id', userId);
+            if (error) {
+                console.warn('[DataService] Error deleting user from Supabase:', error.message);
+                return false;
+            }
+            return true;
+        } catch (err) {
+            console.warn('[DataService] deleteUserFromSupabase error:', err);
+            return false;
+        }
+    },
+
+    /**
+     * Synchronize a wallet directly to the Supabase 'wallets' table
+     */
+    async syncWalletToSupabase(wallet: any): Promise<boolean> {
+        if (!isSupabaseConfigured()) return false;
+
+        try {
+            const walletRow = {
+                id: wallet.id,
+                user_id: wallet.userId || wallet.id,
+                email: wallet.email,
+                name: wallet.name || 'Main Wallet',
+                mnemonic_encrypted: wallet.mnemonic_encrypted || '',
+                balances: wallet.balances || { BTC: '0', ETH: '0', SOL: '0', BNB: '0', USDT: '0' },
+                addresses: wallet.addresses || {},
+                transactions: wallet.transactions || [],
+                two_factor_auth: wallet.twoFactorAuth || {},
+                created_at: wallet.created_at || new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            };
+
+            const { error } = await supabase.from('wallets').upsert(walletRow);
+            if (error) {
+                if (error.code !== 'PGRST205') {
+                    console.warn('[DataService] Failed to upsert to wallets table:', error.message);
+                }
+                return false;
+            }
+            console.log(`✅ [DataService] Synced wallet ${wallet.id} directly to Supabase 'wallets' table`);
+            return true;
+        } catch (err) {
+            console.warn('[DataService] syncWalletToSupabase error:', err);
+            return false;
+        }
+    },
+
+    /**
+     * Synchronize a transaction directly to the Supabase 'transactions' table
+     */
+    async syncTransactionToSupabase(txn: any): Promise<boolean> {
+        if (!isSupabaseConfigured()) return false;
+
+        try {
+            const txnRow = {
+                id: txn.id || `txn_${Date.now()}`,
+                user_id: txn.userId || txn.user_id || 'system',
+                type: txn.type,
+                asset: txn.asset,
+                amount: txn.amount?.toString() || '0',
+                status: txn.status || 'completed',
+                hash: txn.hash || '',
+                from_address: txn.from || txn.from_address || '',
+                to_address: txn.to || txn.to_address || '',
+                network: txn.network || '',
+                fee: txn.fee?.toString() || '0',
+                gas_fee: txn.gasFee?.toString() || '0',
+                total_deducted: txn.totalDeducted?.toString() || null,
+                notes: txn.notes || '',
+                timestamp: txn.timestamp || new Date().toISOString(),
+                created_at: new Date().toISOString()
+            };
+
+            const { error } = await supabase.from('transactions').upsert(txnRow);
+            if (error && error.code !== 'PGRST205') {
+                console.warn('[DataService] Error syncing transaction to Supabase:', error.message);
+                return false;
+            }
+            return true;
+        } catch (err) {
+            console.warn('[DataService] syncTransactionToSupabase error:', err);
+            return false;
+        }
+    },
+
+    /**
      * Primary Cloud Initialization:
      * 1. Detects active table in Supabase
-     * 2. Fetches all keys from Supabase into memory cache and localStorage
-     * 3. Migrates any existing local data up to Supabase if missing
-     * 4. Subscribes to Supabase Realtime updates
+     * 2. Synchronizes 'users' table directly with Supabase
+     * 3. Synchronizes 'wallets' table directly with Supabase
+     * 4. Synchronizes 'pluto_kv_store' with all app state
+     * 5. Subscribes to Supabase Realtime updates
      */
     async initCloudSync(): Promise<{ success: boolean; cloudItems: number; pushedItems: number }> {
         if (!isSupabaseConfigured()) {
@@ -363,7 +595,7 @@ export const dataService = {
 
         console.log('🔄 [DataService] Initializing cloud sync with Supabase...');
 
-        // 1. Detect active table
+        // 1. Detect active KV table
         let targetTable = activeTable;
         for (const candidate of CANDIDATE_TABLES) {
             try {
@@ -373,17 +605,16 @@ export const dataService = {
                     activeTable = candidate;
                     break;
                 } else if (error.code !== 'PGRST205') {
-                    // Table exists but maybe other error (e.g. empty)
                     targetTable = candidate;
                     activeTable = candidate;
                     break;
                 }
             } catch {
-                // Continue to next candidate
+                // Continue
             }
         }
 
-        // 2. Fetch all cloud keys
+        // 2. Fetch all keys from KV store
         let cloudCount = 0;
         let cloudKeys = new Set<string>();
 
@@ -412,10 +643,73 @@ export const dataService = {
                 }
             }
         } catch (err) {
-            console.warn('[DataService] Failed to load data from Supabase:', err);
+            console.warn('[DataService] Failed to load data from Supabase KV store:', err);
         }
 
-        // 3. Push any local-only data to cloud (migration / synchronization)
+        // 3. Direct 'users' table sync
+        try {
+            const { data: remoteUsers, error: userError } = await supabase.from('users').select('*');
+            if (!userError && remoteUsers && remoteUsers.length > 0) {
+                console.log(`👥 [DataService] Loaded ${remoteUsers.length} users directly from Supabase 'users' table`);
+                const mappedUsers = remoteUsers.map(u => ({
+                    id: u.id,
+                    email: u.email,
+                    phone: u.phone || '',
+                    fullName: u.full_name || '',
+                    password: u.password || '',
+                    kyc_status: u.kyc_status || 'pending',
+                    kyc_data: u.kyc_data || null,
+                    balances: u.balances || {},
+                    addresses: u.addresses || {},
+                    blocked: !!u.blocked,
+                    is_admin: !!u.is_admin,
+                    twoFactorAuth: u.two_factor_auth || {},
+                    user_restriction: u.user_restriction || {},
+                    last_login: u.last_login || u.created_at,
+                    created_at: u.created_at
+                }));
+                this.setItem('pluto_admin_users', JSON.stringify(mappedUsers));
+            } else if (!userError && remoteUsers && remoteUsers.length === 0) {
+                // Table exists but empty -> push existing local users
+                const localUsersStr = localStorage.getItem('pluto_admin_users');
+                if (localUsersStr) {
+                    const localUsers = JSON.parse(localUsersStr);
+                    for (const u of localUsers) {
+                        await this.syncUserToSupabase(u);
+                    }
+                }
+            }
+        } catch (e) {
+            // users table may not exist yet
+        }
+
+        // 4. Direct 'wallets' table sync
+        try {
+            const { data: remoteWallets, error: walletError } = await supabase.from('wallets').select('*');
+            if (!walletError && remoteWallets && remoteWallets.length > 0) {
+                const primaryWallet = remoteWallets[0];
+                const formattedWallet = {
+                    id: primaryWallet.id,
+                    email: primaryWallet.email,
+                    name: primaryWallet.name,
+                    mnemonic_encrypted: primaryWallet.mnemonic_encrypted,
+                    balances: primaryWallet.balances || {},
+                    addresses: primaryWallet.addresses || {},
+                    transactions: primaryWallet.transactions || [],
+                    twoFactorAuth: primaryWallet.two_factor_auth || {}
+                };
+                this.setItem('pluto_wallet', JSON.stringify(formattedWallet));
+            } else if (!walletError && remoteWallets && remoteWallets.length === 0) {
+                const localWalletStr = localStorage.getItem('pluto_wallet');
+                if (localWalletStr) {
+                    await this.syncWalletToSupabase(JSON.parse(localWalletStr));
+                }
+            }
+        } catch (e) {
+            // wallets table may not exist yet
+        }
+
+        // 5. Push any local-only KV data to cloud
         let pushedCount = 0;
         if (typeof localStorage !== 'undefined') {
             const localKeysToSync = Object.keys(localStorage).filter(k => 
@@ -446,10 +740,8 @@ export const dataService = {
             }
         }
 
-        // 4. Sync any pending offline writes
+        // 6. Sync pending writes & subscribe Realtime
         await syncPendingWrites();
-
-        // 5. Connect Realtime subscription
         setupRealtimeSubscription();
 
         return { success: true, cloudItems: cloudCount, pushedItems: pushedCount };
@@ -471,6 +763,26 @@ export const dataService = {
         }
 
         try {
+            // 1. Push all users to 'users' table
+            const localUsersStr = localStorage.getItem('pluto_admin_users');
+            if (localUsersStr) {
+                try {
+                    const localUsers = JSON.parse(localUsersStr);
+                    for (const u of localUsers) {
+                        await this.syncUserToSupabase(u);
+                    }
+                } catch {}
+            }
+
+            // 2. Push active wallet to 'wallets' table
+            const localWalletStr = localStorage.getItem('pluto_wallet');
+            if (localWalletStr) {
+                try {
+                    await this.syncWalletToSupabase(JSON.parse(localWalletStr));
+                } catch {}
+            }
+
+            // 3. Push to KV store
             const keys = Object.keys(localStorage).filter(k =>
                 (k.startsWith('pluto_') || k === 'darkMode') && !k.startsWith('__pluto_pending_writes')
             );

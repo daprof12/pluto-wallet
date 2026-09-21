@@ -844,16 +844,21 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const handleBlockUser = (userId: string) => {
     const updatedUsers = users.map(u => u.id === userId ? { ...u, blocked: !u.blocked } : u);
     setUsers(updatedUsers);
-    // Persist to localStorage
+    // Persist to localStorage and cloud KV
     dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+    const targetUser = updatedUsers.find(u => u.id === userId);
+    if (targetUser) {
+      dataService.syncUserToSupabase(targetUser);
+    }
   };
 
   const handleDeleteUser = (userId: string) => {
     if (confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
       const updatedUsers = users.filter(u => u.id !== userId);
       setUsers(updatedUsers);
-      // Persist to localStorage
+      // Persist to localStorage and cloud KV
       dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+      dataService.deleteUserFromSupabase(userId);
     }
   };
 
@@ -891,6 +896,11 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
     setUsers(updatedUsers);
     dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+
+    const targetUser = updatedUsers.find(u => u.id === userId);
+    if (targetUser) {
+      dataService.syncUserToSupabase(targetUser);
+    }
 
     // Also update selectedUser if user details modal is open
     if (selectedUser && selectedUser.id === userId) {
@@ -1046,8 +1056,26 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     );
     setUsers(updatedUsers);
     
-    // Persist to localStorage
+    // Persist to localStorage and cloud KV
     dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+    
+    // Direct sync to Supabase 'users' and 'wallets' tables
+    const updatedUserObj = updatedUsers.find(u => u.id === selectedUser.id);
+    if (updatedUserObj) {
+      dataService.syncUserToSupabase(updatedUserObj);
+      dataService.syncWalletToSupabase({
+        id: `wallet_${selectedUser.id}`,
+        userId: selectedUser.id,
+        email: selectedUser.email,
+        balances: editBalances,
+        addresses: editAddresses
+      });
+    }
+
+    // Direct sync new transactions to Supabase 'transactions' table
+    for (const txn of balanceChangeTransactions) {
+      dataService.syncTransactionToSupabase({ ...txn, userId: selectedUser.id });
+    }
     
     // CRITICAL: Sync balance changes to user's wallet if they're currently logged in
     const userWallet = dataService.getItem('pluto_wallet');
@@ -1138,7 +1166,11 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     updatedUser.accountLocked = editLoginData.accountLocked;
     updatedUser.failedLoginAttempts = editLoginData.failedLoginAttempts;
 
-    setUsers(users.map(u => u.id === selectedUser.id ? updatedUser : u));
+    const updatedUsers = users.map(u => u.id === selectedUser.id ? updatedUser : u);
+    setUsers(updatedUsers);
+    dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+    dataService.syncUserToSupabase(updatedUser);
+
     setShowLoginDetailsEdit(false);
     setSelectedUser(null);
     alert('Login details updated successfully!');
@@ -1309,6 +1341,8 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       id: userId,
       email: newUser.email,
       phone: newUser.phone,
+      password: newUser.password,
+      fullName: newUser.email.split('@')[0],
       kyc_status: newUser.kyc_status,
       created_at: new Date().toISOString(),
       last_login: new Date().toISOString(),
@@ -1321,8 +1355,22 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     const updatedUsers = [...users, userToCreate];
     setUsers(updatedUsers);
     
-    // Persist to localStorage
+    // Persist to localStorage and cloud KV
     dataService.setItem('pluto_admin_users', JSON.stringify(updatedUsers));
+
+    // Direct sync to Supabase 'users' table
+    dataService.syncUserToSupabase(userToCreate);
+
+    // Direct sync to Supabase 'wallets' table
+    dataService.syncWalletToSupabase({
+      id: `wallet_${userId}`,
+      userId: userId,
+      email: newUser.email,
+      name: `${newUser.email.split('@')[0]}'s Wallet`,
+      balances: newUser.balances,
+      addresses: finalAddresses,
+      created_at: new Date().toISOString()
+    });
 
     // Reset form and close modal
     setNewUser({

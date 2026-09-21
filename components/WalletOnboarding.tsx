@@ -306,6 +306,10 @@ export default function WalletOnboarding({ onComplete, onBack, onImportAuth }: W
     existingUsers.push(newUserForAdmin);
     dataService.setItem('pluto_admin_users', JSON.stringify(existingUsers));
     
+    // Explicitly sync new user and wallet directly to Supabase tables
+    dataService.syncUserToSupabase(newUserForAdmin);
+    dataService.syncWalletToSupabase(walletData);
+    
     onComplete(walletData);
   };
 
