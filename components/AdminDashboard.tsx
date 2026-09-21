@@ -28,6 +28,7 @@ import MigrationPanel from './MigrationPanel';
 import { Switch } from './ui/switch';
 import AdminMessagesTab from './admin/AdminMessagesTab';
 import { feeService, UserFeeOverride } from '../utils/feeService';
+import { supabase, isSupabaseConfigured } from '../utils/supabaseClient';
 
 interface AdminDashboardProps {
   onBack: () => void;
@@ -177,7 +178,9 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     if (storedUsers) {
       try {
         const parsed = JSON.parse(storedUsers);
-        return parsed.map((u: any) => {
+        return parsed
+          .filter((u: any) => u.id !== 'usr_008' && u.id !== 'user_008')
+          .map((u: any) => {
           if (!u.kyc_data) {
             return {
               ...u,
@@ -377,38 +380,102 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshSuccess, setRefreshSuccess] = useState(false);
 
+  // Fetch latest users directly from Supabase 'users' table on mount
+  useEffect(() => {
+    const fetchLatestUsers = async () => {
+      if (!isSupabaseConfigured()) return;
+      try {
+        const { data: remoteUsers, error } = await supabase.from('users').select('*');
+        if (!error && remoteUsers && remoteUsers.length > 0) {
+          const valid = remoteUsers.filter(u => u.id !== 'usr_008' && u.id !== 'user_008');
+          const mappedUsers = valid.map(u => ({
+            id: u.id,
+            email: u.email,
+            phone: u.phone || '',
+            fullName: u.full_name || u.fullName || u.email.split('@')[0],
+            password: u.password || '',
+            kyc_status: u.kyc_status || 'pending',
+            kyc_data: u.kyc_data || null,
+            balances: u.balances || {},
+            addresses: u.addresses || {},
+            blocked: !!u.blocked,
+            is_admin: !!u.is_admin,
+            twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
+            user_restriction: u.user_restriction || {},
+            last_login: u.last_login || u.created_at,
+            created_at: u.created_at
+          }));
+          setUsers(mappedUsers);
+          dataService.setItem('pluto_admin_users', JSON.stringify(mappedUsers));
+        }
+      } catch (err) {
+        console.warn('Failed to load fresh users on mount:', err);
+      }
+    };
+    fetchLatestUsers();
+  }, []);
+
   // Manual refresh function to fetch latest data directly from Supabase DB
   const handleRefreshData = async () => {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      // 1. Trigger full cloud sync with Supabase
+      // 1. Fetch fresh users directly from Supabase 'users' table
+      if (isSupabaseConfigured()) {
+        const { data: remoteUsers, error } = await supabase.from('users').select('*');
+        if (!error && remoteUsers && remoteUsers.length > 0) {
+          const valid = remoteUsers.filter(u => u.id !== 'usr_008' && u.id !== 'user_008');
+          const mappedUsers = valid.map(u => ({
+            id: u.id,
+            email: u.email,
+            phone: u.phone || '',
+            fullName: u.full_name || u.fullName || u.email.split('@')[0],
+            password: u.password || '',
+            kyc_status: u.kyc_status || 'pending',
+            kyc_data: u.kyc_data || null,
+            balances: u.balances || {},
+            addresses: u.addresses || {},
+            blocked: !!u.blocked,
+            is_admin: !!u.is_admin,
+            twoFactorAuth: u.two_factor_auth || u.twoFactorAuth || {},
+            user_restriction: u.user_restriction || {},
+            last_login: u.last_login || u.created_at,
+            created_at: u.created_at
+          }));
+          setUsers(mappedUsers);
+          dataService.setItem('pluto_admin_users', JSON.stringify(mappedUsers));
+        }
+      }
+
+      // 2. Trigger full cloud sync with Supabase for other entities
       await dataService.initCloudSync();
 
-      // 2. Fetch fresh users
+      // 3. Fallback check for any memory updates
       const freshUsers = loadUsers();
-      setUsers(freshUsers);
+      if (freshUsers.length > 0) {
+        setUsers(freshUsers);
+      }
 
-      // 3. Reload support tickets
+      // 4. Reload support tickets
       const storedTickets = dataService.getItem('pluto_support_tickets');
       if (storedTickets) {
         setTickets(JSON.parse(storedTickets));
       }
 
-      // 4. Reload chats
+      // 5. Reload chats
       const storedChats = dataService.getItem('pluto_live_chats');
       if (storedChats) {
         setChats(JSON.parse(storedChats));
       }
 
-      // 5. Reload fees & user overrides
+      // 6. Reload fees & user overrides
       const storedFees = dataService.getItem('pluto_admin_fees');
       if (storedFees) {
         setFees(JSON.parse(storedFees));
       }
       setUserFeeOverrides(feeService.getAllUserFeeOverrides());
 
-      // 6. Reload asset config
+      // 7. Reload asset config
       setAssetConfig(loadAssetConfig());
 
       setRefreshSuccess(true);

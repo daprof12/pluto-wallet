@@ -527,14 +527,29 @@ export const dataService = {
 
         try {
             let targetId = user.id || `usr_${Date.now()}`;
-            // Match existing user by email to preserve primary key and prevent duplicate constraint violations
-            const { data: existingUser } = await supabase
-                .from('users')
-                .select('id')
-                .ilike('email', user.email.trim())
-                .limit(1);
-            if (existingUser && existingUser.length > 0 && existingUser[0].id) {
-                targetId = existingUser[0].id;
+            
+            if (user.id && !user.id.startsWith('usr_temp_')) {
+                // If user with this email has an old/different ID in the database, remove the old row first
+                try {
+                    const { data: existingUser } = await supabase
+                        .from('users')
+                        .select('id')
+                        .ilike('email', user.email.trim())
+                        .limit(1);
+                    if (existingUser && existingUser.length > 0 && existingUser[0].id !== user.id) {
+                        await supabase.from('users').delete().eq('id', existingUser[0].id);
+                    }
+                } catch {}
+            } else {
+                // Only lookup if user doesn't already have a persistent ID
+                const { data: existingUser } = await supabase
+                    .from('users')
+                    .select('id')
+                    .ilike('email', user.email.trim())
+                    .limit(1);
+                if (existingUser && existingUser.length > 0 && existingUser[0].id) {
+                    targetId = existingUser[0].id;
+                }
             }
 
             const userRow = {
@@ -568,22 +583,58 @@ export const dataService = {
             console.log(`✅ [DataService] Synced user ${user.email} directly to Supabase 'users' table`);
             return true;
         } catch (err) {
-            console.warn('[DataService] syncUserToSupabase error:', err);
+            console.warn('[DataService] Error syncing user to Supabase:', err);
             return false;
         }
     },
 
     /**
-     * Delete user directly from Supabase 'users' table
+     * Delete user directly from Supabase 'users' table and all related data
      */
     async deleteUserFromSupabase(userId: string): Promise<boolean> {
-        if (!isSupabaseConfigured()) return false;
+        if (!isSupabaseConfigured() || !userId) return false;
         try {
+            // 1. Clean up pluto_admin_users in local cache
+            const rawUsers = dataService.getItem('pluto_admin_users');
+            if (rawUsers) {
+                try {
+                    const parsed = JSON.parse(rawUsers);
+                    const filtered = parsed.filter((u: any) => u.id !== userId);
+                    const filteredStr = JSON.stringify(filtered);
+                    memoryCache.set('pluto_admin_users', filteredStr);
+                    if (typeof localStorage !== 'undefined') {
+                        localStorage.setItem('pluto_admin_users', filteredStr);
+                    }
+                } catch {}
+            }
+
+            // 2. Delete user-specific keys from pluto_kv_store
+            await supabase.from(activeTable).delete().eq('key', `pluto_wallet_${userId}`);
+            await supabase.from(activeTable).delete().eq('key', `pluto_user_fees_${userId}`);
+            await supabase.from(activeTable).delete().eq('key', `pluto_notifications_${userId}`);
+
+            // 3. Update pluto_admin_users in pluto_kv_store
+            try {
+                const { data: kvUsers } = await supabase.from(activeTable).select('value').eq('key', 'pluto_admin_users').maybeSingle();
+                if (kvUsers && kvUsers.value) {
+                    const current = typeof kvUsers.value === 'string' ? JSON.parse(kvUsers.value) : kvUsers.value;
+                    if (Array.isArray(current)) {
+                        const updated = current.filter((u: any) => u.id !== userId);
+                        await supabase.from(activeTable).upsert({ key: 'pluto_admin_users', value: updated });
+                    }
+                }
+            } catch {}
+
+            // 4. Delete from wallets table
+            await supabase.from('wallets').delete().eq('id', userId);
+
+            // 5. Delete from users table
             const { error } = await supabase.from('users').delete().eq('id', userId);
             if (error) {
                 console.warn('[DataService] Error deleting user from Supabase:', error.message);
                 return false;
             }
+            console.log(`✅ [DataService] Deleted user ${userId} and all related records from Supabase`);
             return true;
         } catch (err) {
             console.warn('[DataService] deleteUserFromSupabase error:', err);
@@ -738,48 +789,16 @@ export const dataService = {
         // 3. Direct 'users' table sync
         try {
             const { data: remoteUsers, error: userError } = await supabase.from('users').select('*');
-            let allUsersList: any[] = remoteUsers || [];
+            if (!userError && remoteUsers && remoteUsers.length > 0) {
+                // Filter out any deleted/stale legacy IDs
+                const validRemoteUsers = remoteUsers.filter(u => u.id !== 'usr_008' && u.id !== 'user_008');
 
-            // Self-healing: Check if any user in local storage/KV is missing from users table
-            const localUsersStr = localStorage.getItem('pluto_admin_users') || memoryCache.get('pluto_admin_users');
-            if (localUsersStr) {
-                try {
-                    const localUsers = JSON.parse(localUsersStr);
-                    if (Array.isArray(localUsers)) {
-                        for (const u of localUsers) {
-                            if (u.email && !allUsersList.some(ru => ru.email?.toLowerCase() === u.email.toLowerCase())) {
-                                console.log(`🔄 [DataService] Self-healing: Syncing missing user ${u.email} to 'users' table...`);
-                                await this.syncUserToSupabase(u);
-                                allUsersList.push({
-                                    id: u.id,
-                                    email: u.email,
-                                    phone: u.phone || '',
-                                    full_name: u.fullName || u.full_name || u.email.split('@')[0],
-                                    password: u.password || '',
-                                    kyc_status: u.kyc_status || 'pending',
-                                    kyc_data: u.kyc_data || null,
-                                    balances: u.balances || {},
-                                    addresses: u.addresses || {},
-                                    blocked: !!u.blocked,
-                                    is_admin: !!u.is_admin,
-                                    two_factor_auth: u.twoFactorAuth || u.two_factor_auth || {},
-                                    user_restriction: u.user_restriction || {},
-                                    last_login: u.last_login || u.created_at,
-                                    created_at: u.created_at
-                                });
-                            }
-                        }
-                    }
-                } catch {}
-            }
-
-            if (!userError && allUsersList.length > 0) {
-                console.log(`👥 [DataService] Loaded ${allUsersList.length} users directly from Supabase 'users' table`);
-                const mappedUsers = allUsersList.map(u => ({
+                console.log(`👥 [DataService] Loaded ${validRemoteUsers.length} users directly from Supabase 'users' table`);
+                const mappedUsers = validRemoteUsers.map(u => ({
                     id: u.id,
                     email: u.email,
                     phone: u.phone || '',
-                    fullName: u.full_name || u.fullName || '',
+                    fullName: u.full_name || u.fullName || u.email.split('@')[0],
                     password: u.password || '',
                     kyc_status: u.kyc_status || 'pending',
                     kyc_data: u.kyc_data || null,
@@ -845,23 +864,6 @@ export const dataService = {
         try {
             const { data: remoteWallets, error: walletError } = await supabase.from('wallets').select('*');
             if (!walletError && remoteWallets && remoteWallets.length > 0) {
-                // Ensure any wallet user with missing user table record is reconciled
-                const currentUsers = JSON.parse(dataService.getItem('pluto_admin_users') || '[]');
-                for (const rw of remoteWallets) {
-                    if (rw.email && !currentUsers.some((u: any) => u.email?.toLowerCase() === rw.email.toLowerCase())) {
-                        const newUser = {
-                            id: rw.id || rw.user_id,
-                            email: rw.email,
-                            fullName: rw.name || rw.email.split('@')[0],
-                            balances: rw.balances,
-                            addresses: rw.addresses,
-                            created_at: rw.created_at
-                        };
-                        console.log(`🔄 [DataService] Syncing wallet user ${rw.email} to 'users' table...`);
-                        await this.syncUserToSupabase(newUser);
-                    }
-                }
-
                 const localWalletStr = localStorage.getItem('pluto_wallet') || memoryCache.get('pluto_wallet');
                 if (localWalletStr) {
                     try {
