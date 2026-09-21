@@ -1,12 +1,14 @@
 import { useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Mail, Lock } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import Logo from './Logo';
+import { supabase, isSupabaseConfigured } from '../utils/supabaseClient';
+import dataService from '../utils/dataService';
 
 interface UnlockWalletProps {
-  walletData: any;
-  onUnlock: () => void;
+  walletData?: any;
+  onUnlock: (wallet?: any) => void;
   onForgot: () => void;
   onCreateNew: () => void;
   onBackToLanding: () => void;
@@ -14,12 +16,20 @@ interface UnlockWalletProps {
 }
 
 export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateNew, onBackToLanding, isImporting = false }: UnlockWalletProps) {
+  const [email, setEmail] = useState(() => {
+    return walletData?.email || (typeof localStorage !== 'undefined' ? localStorage.getItem('pluto_last_login_email') : '') || '';
+  });
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleUnlock = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError('Please enter your email address');
+      return;
+    }
     if (!password) {
       setError('Please enter your password');
       return;
@@ -28,24 +38,146 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
     setIsLoading(true);
     setError('');
 
-    // Simulate password verification
-    setTimeout(() => {
-      // In a real app, this would verify the password against the encrypted wallet
-      // For demo purposes, we check against the stored password
-      const storedPassword = walletData.password;
-      
-      // Check if password matches (either plain or base64 encoded)
-      if (storedPassword && (password === storedPassword || password === atob(storedPassword))) {
-        onUnlock();
-      } else if (!storedPassword && password.length >= 8) {
-        // Fallback for legacy wallets without password field
-        onUnlock();
-      } else {
+    try {
+      // 1. Search in Supabase 'users' table
+      let matchedUser: any = null;
+      if (isSupabaseConfigured()) {
+        try {
+          const { data: remoteUser, error: queryErr } = await supabase
+            .from('users')
+            .select('*')
+            .ilike('email', trimmedEmail)
+            .maybeSingle();
+          if (!queryErr && remoteUser) {
+            matchedUser = remoteUser;
+          }
+        } catch (e) {
+          console.warn('[UnlockWallet] Supabase user query error:', e);
+        }
+      }
+
+      // 2. Fallback to local admin users cache
+      if (!matchedUser) {
+        const cachedUsersStr = dataService.getItem('pluto_admin_users');
+        if (cachedUsersStr) {
+          try {
+            const cached = JSON.parse(cachedUsersStr);
+            matchedUser = cached.find((u: any) => u.email?.toLowerCase() === trimmedEmail.toLowerCase());
+          } catch {}
+        }
+      }
+
+      // 3. Fallback to passed walletData or active local wallet
+      if (!matchedUser) {
+        if (walletData && walletData.email?.toLowerCase() === trimmedEmail.toLowerCase()) {
+          matchedUser = walletData;
+        } else {
+          const localWStr = dataService.getItem('pluto_wallet');
+          if (localWStr) {
+            try {
+              const localW = JSON.parse(localWStr);
+              if (localW.email?.toLowerCase() === trimmedEmail.toLowerCase()) {
+                matchedUser = localW;
+              }
+            } catch {}
+          }
+        }
+      }
+
+      if (!matchedUser) {
+        setError('No account found for this email address. Please check or create a new wallet.');
+        setIsLoading(false);
+        return;
+      }
+
+      if (matchedUser.blocked) {
+        setError('This account has been restricted. Please contact support.');
+        setIsLoading(false);
+        return;
+      }
+
+      // 4. Verify password
+      const storedPwd = matchedUser.password;
+      let isMatch = false;
+
+      if (storedPwd) {
+        let decodedStored = '';
+        try { decodedStored = atob(storedPwd); } catch {}
+        let encodedEntered = '';
+        try { encodedEntered = btoa(password); } catch {}
+
+        isMatch = (
+          password === storedPwd ||
+          password === decodedStored ||
+          encodedEntered === storedPwd
+        );
+      } else if (password.length >= 6) {
+        // Fallback for legacy wallets without stored password
+        isMatch = true;
+      }
+
+      if (!isMatch) {
         setError('Incorrect password. Please try again.');
         setPassword('');
+        setIsLoading(false);
+        return;
       }
+
+      // Remember email for next login
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('pluto_last_login_email', trimmedEmail);
+      }
+
+      // 5. Fetch associated wallet record from Supabase 'wallets' table
+      let matchedWallet: any = null;
+      if (isSupabaseConfigured()) {
+        try {
+          const { data: remoteWallet } = await supabase
+            .from('wallets')
+            .select('*')
+            .ilike('email', trimmedEmail)
+            .maybeSingle();
+          if (remoteWallet) {
+            matchedWallet = remoteWallet;
+          }
+        } catch {}
+      }
+
+      // Reconstruct full active wallet session
+      const activeWallet = {
+        id: matchedUser.id,
+        userId: matchedUser.id,
+        email: matchedUser.email,
+        phone: matchedUser.phone || '',
+        fullName: matchedUser.full_name || matchedUser.fullName || trimmedEmail.split('@')[0],
+        password: matchedUser.password || password,
+        balances: matchedUser.balances || matchedWallet?.balances || { BTC: '0', ETH: '0', SOL: '0', BNB: '0', USDT: '0' },
+        addresses: matchedUser.addresses || matchedWallet?.addresses || {},
+        transactions: matchedWallet?.transactions || [],
+        mnemonic_encrypted: matchedWallet?.mnemonic_encrypted || matchedUser.mnemonic_encrypted || '',
+        kyc_status: matchedUser.kyc_status || 'pending',
+        kyc_data: matchedUser.kyc_data || {},
+        blocked: !!matchedUser.blocked,
+        twoFactorAuth: matchedUser.two_factor_auth || matchedUser.twoFactorAuth || matchedWallet?.two_factor_auth || {},
+        user_restriction: matchedUser.user_restriction || {},
+        created_at: matchedUser.created_at,
+        last_login: new Date().toISOString()
+      };
+
+      // Set active wallet
+      const activeWalletStr = JSON.stringify(activeWallet);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('pluto_wallet', activeWalletStr);
+      }
+      dataService.setItem('pluto_wallet', activeWalletStr);
+
+      onUnlock(activeWallet);
+    } catch (err) {
+      console.error('[UnlockWallet] Login error:', err);
+      setError('An error occurred during login. Please try again.');
+    } finally {
       setIsLoading(false);
-    }, 500);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -64,28 +196,51 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
 
       <div className="relative z-10 w-full max-w-md">
         {/* Logo and Brand */}
-        <div className="text-center mb-12">
+        <div className="text-center mb-10">
           <Logo size="md" showText={true} onClick={onBackToLanding} />
           <p className="text-gray-400 mt-4">v2.20.4.2</p>
         </div>
 
         {/* Unlock Card */}
         <div className="bg-gray-900/50 backdrop-blur-xl rounded-3xl p-8 border border-gray-800 shadow-2xl">
-          <h2 className="text-2xl text-white mb-6 text-center">
+          <h2 className="text-2xl text-white mb-2 text-center font-semibold">
             {isImporting ? 'Authenticate Wallet' : 'Welcome Back'}
           </h2>
+          <p className="text-gray-400 text-sm text-center mb-6">
+            Enter your email and password to access your wallet
+          </p>
           
           {isImporting && (
             <div className="mb-6 p-4 bg-blue-900/30 border border-blue-700 rounded-lg">
               <p className="text-blue-200 text-sm text-center">
-                Wallet found! Please enter your password to access your wallet.
+                Wallet found! Please enter your credentials to access your wallet.
               </p>
             </div>
           )}
 
+          {/* Email Input */}
+          <div className="mb-4">
+            <label className="block text-gray-300 mb-2 text-sm">Email</label>
+            <div className="relative">
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  setError('');
+                }}
+                onKeyPress={handleKeyPress}
+                placeholder="Insert your email"
+                className="w-full bg-gray-800/50 border-gray-700 text-white placeholder:text-gray-500 pl-11 h-14 rounded-2xl focus:border-purple-500 focus:ring-purple-500"
+                autoFocus={!email}
+              />
+              <Mail className="w-5 h-5 text-gray-500 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+          </div>
+
           {/* Password Input */}
           <div className="mb-6">
-            <label className="block text-gray-300 mb-3 text-sm">Password</label>
+            <label className="block text-gray-300 mb-2 text-sm">Password</label>
             <div className="relative">
               <Input
                 type={showPassword ? 'text' : 'password'}
@@ -96,9 +251,10 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
                 }}
                 onKeyPress={handleKeyPress}
                 placeholder="Insert your password"
-                className="w-full bg-gray-800/50 border-gray-700 text-white placeholder:text-gray-500 pr-12 h-14 rounded-2xl focus:border-purple-500 focus:ring-purple-500"
-                autoFocus
+                className="w-full bg-gray-800/50 border-gray-700 text-white placeholder:text-gray-500 pl-11 pr-12 h-14 rounded-2xl focus:border-purple-500 focus:ring-purple-500"
+                autoFocus={!!email}
               />
+              <Lock className="w-5 h-5 text-gray-500 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
@@ -119,8 +275,8 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
           {/* Unlock Button */}
           <Button
             onClick={handleUnlock}
-            disabled={isLoading || !password}
-            className="w-full h-14 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-2xl text-lg disabled:opacity-50 disabled:cursor-not-allowed mb-4"
+            disabled={isLoading || !email || !password}
+            className="w-full h-14 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-2xl text-lg disabled:opacity-50 disabled:cursor-not-allowed mb-4 shadow-lg shadow-purple-600/30"
           >
             {isLoading ? 'Unlocking...' : 'Unlock wallet'}
           </Button>
@@ -150,15 +306,6 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
             </div>
           </div>
         </div>
-
-        {/* Wallet Info */}
-        {walletData && (
-          <div className="mt-6 text-center">
-            <p className="text-gray-500 text-sm">
-              Wallet: {walletData.addresses?.BTC?.substring(0, 8)}...{walletData.addresses?.BTC?.substring(-6)}
-            </p>
-          </div>
-        )}
       </div>
     </div>
   );

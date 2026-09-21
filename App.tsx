@@ -272,9 +272,13 @@ export default function App() {
     }
   };
 
-  const handleUnlockWallet = () => {
+  const handleUnlockWallet = (unlockedWallet?: any) => {
+    const target = unlockedWallet || walletData;
+    if (unlockedWallet) {
+      setWalletData(unlockedWallet);
+    }
     // After password unlock, check if 2FA is enabled
-    if (walletData?.twoFactorAuth?.enabled) {
+    if (target?.twoFactorAuth?.enabled) {
       setView('2fa-auth');
     } else {
       setIsWalletUnlocked(true);
@@ -435,7 +439,7 @@ export default function App() {
       {view === 'landing' && (
         <LandingPage
           onGetStarted={() => setView('onboarding')}
-          onAccessWallet={() => walletData ? setView('unlock') : setView('onboarding')}
+          onAccessWallet={() => setView('unlock')}
           onAdminAccess={() => setView('adminLogin')}
           isLoggedIn={isWalletUnlocked}
           userEmail={walletData?.email || ''}
@@ -463,7 +467,7 @@ export default function App() {
         />
       )}
 
-      {view === 'unlock' && walletData && (
+      {view === 'unlock' && (
         <UnlockWallet
           walletData={walletData}
           onUnlock={handleUnlockWallet}

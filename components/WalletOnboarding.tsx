@@ -28,6 +28,7 @@ export default function WalletOnboarding({ onComplete, onBack, onImportAuth }: W
   const [showMnemonic, setShowMnemonic] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [copiedMnemonic, setCopiedMnemonic] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
   
   // Validation states
   const [emailError, setEmailError] = useState('');
@@ -252,65 +253,78 @@ export default function WalletOnboarding({ onComplete, onBack, onImportAuth }: W
     alert('No wallet found with this recovery phrase. Please check your phrase or create a new wallet.');
   };
 
-  const completeSetup = () => {
-    // Generate valid-format addresses for all chains
-    const walletData = {
-      id: `usr_${Date.now()}`,
-      created_at: new Date('2017-12-06').toISOString(),
-      email: email,
-      phone: phone,
-      fullName: email.split('@')[0], // Use email prefix as initial name
-      mnemonic_encrypted: btoa(mnemonic.join(' ')), // Mock encryption
-      password: btoa(password), // Store hashed password for authentication
-      passwordLastChanged: new Date().toISOString(),
-      addresses: generateAllAddresses(),
-      balances: {
-        BTC: '0',
-        ETH: '0',
-        SOL: '0',
-        BNB: '0',
-        USDT: '0.00'
-      },
-      transactions: [],
-      twoFactorAuth: {
-        enabled: false,
-        preferredMethod: null,
-        passcode: null,
-        biometricEnabled: false,
-        biometricData: null,
-        setupDate: null
-      },
-      failedLoginAttempts: 0,
-      accountLocked: false,
-      kyc_status: 'pending', // New users start with pending KYC
-      blocked: false,
-      last_login: new Date().toISOString()
-    };
-    
-    // Save user data to admin's user list
-    const existingUsers = JSON.parse(dataService.getItem('pluto_admin_users') || '[]');
-    const newUserForAdmin = {
-      id: walletData.id,
-      email: walletData.email,
-      phone: walletData.phone,
-      kyc_status: walletData.kyc_status,
-      created_at: walletData.created_at,
-      last_login: walletData.last_login,
-      blocked: walletData.blocked,
-      balances: walletData.balances,
-      addresses: walletData.addresses,
-      password: walletData.password,
-      passwordLastChanged: walletData.passwordLastChanged,
-      twoFactorAuth: walletData.twoFactorAuth
-    };
-    existingUsers.push(newUserForAdmin);
-    dataService.setItem('pluto_admin_users', JSON.stringify(existingUsers));
-    
-    // Explicitly sync new user and wallet directly to Supabase tables
-    dataService.syncUserToSupabase(newUserForAdmin);
-    dataService.syncWalletToSupabase(walletData);
-    
-    onComplete(walletData);
+  const completeSetup = async () => {
+    setIsCompleting(true);
+    try {
+      // Generate valid-format addresses for all chains
+      const walletData = {
+        id: `usr_${Date.now()}`,
+        created_at: new Date().toISOString(),
+        email: email,
+        phone: phone,
+        fullName: email.split('@')[0], // Use email prefix as initial name
+        mnemonic_encrypted: btoa(mnemonic.join(' ')), // Mock encryption
+        password: btoa(password), // Store hashed password for authentication
+        passwordLastChanged: new Date().toISOString(),
+        addresses: generateAllAddresses(),
+        balances: {
+          BTC: '0',
+          ETH: '0',
+          SOL: '0',
+          BNB: '0',
+          USDT: '0.00'
+        },
+        transactions: [],
+        twoFactorAuth: {
+          enabled: false,
+          preferredMethod: null,
+          passcode: null,
+          biometricEnabled: false,
+          biometricData: null,
+          setupDate: null
+        },
+        failedLoginAttempts: 0,
+        accountLocked: false,
+        kyc_status: 'pending', // New users start with pending KYC
+        blocked: false,
+        last_login: new Date().toISOString()
+      };
+      
+      // Save user data to admin's user list
+      const existingUsers = JSON.parse(dataService.getItem('pluto_admin_users') || '[]');
+      const newUserForAdmin = {
+        id: walletData.id,
+        email: walletData.email,
+        phone: walletData.phone,
+        fullName: walletData.fullName,
+        kyc_status: walletData.kyc_status,
+        created_at: walletData.created_at,
+        last_login: walletData.last_login,
+        blocked: walletData.blocked,
+        balances: walletData.balances,
+        addresses: walletData.addresses,
+        password: walletData.password,
+        passwordLastChanged: walletData.passwordLastChanged,
+        twoFactorAuth: walletData.twoFactorAuth
+      };
+      const userIdx = existingUsers.findIndex((u: any) => u.email?.toLowerCase() === walletData.email.toLowerCase());
+      if (userIdx >= 0) {
+        existingUsers[userIdx] = newUserForAdmin;
+      } else {
+        existingUsers.push(newUserForAdmin);
+      }
+      dataService.setItem('pluto_admin_users', JSON.stringify(existingUsers));
+      
+      // Explicitly sync new user and wallet directly to Supabase tables
+      await dataService.syncUserToSupabase(newUserForAdmin);
+      await dataService.syncWalletToSupabase(walletData);
+      
+      onComplete(walletData);
+    } catch (err) {
+      console.error('[WalletOnboarding] completeSetup error:', err);
+    } finally {
+      setIsCompleting(false);
+    }
   };
 
   return (
@@ -660,8 +674,8 @@ export default function WalletOnboarding({ onComplete, onBack, onImportAuth }: W
               Your multi-chain wallet has been created successfully. 
               You can now manage BTC, ETH, SOL, BNB, and USDT from one place.
             </p>
-            <Button size="lg" className="w-full" onClick={completeSetup}>
-              Open Wallet
+            <Button size="lg" className="w-full" onClick={completeSetup} disabled={isCompleting}>
+              {isCompleting ? 'Creating Wallet...' : 'Open Wallet'}
             </Button>
           </div>
         )}
