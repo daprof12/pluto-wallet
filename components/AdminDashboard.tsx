@@ -373,6 +373,81 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   };
 
   const [users, setUsers] = useState(loadUsers());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshSuccess, setRefreshSuccess] = useState(false);
+
+  // Manual refresh function to fetch latest data directly from Supabase DB
+  const handleRefreshData = async () => {
+    setIsRefreshing(true);
+    setRefreshSuccess(false);
+    try {
+      // 1. Trigger full cloud sync with Supabase
+      await dataService.initCloudSync();
+
+      // 2. Fetch fresh users
+      const freshUsers = loadUsers();
+      setUsers(freshUsers);
+
+      // 3. Reload support tickets
+      const storedTickets = dataService.getItem('pluto_support_tickets');
+      if (storedTickets) {
+        setTickets(JSON.parse(storedTickets));
+      }
+
+      // 4. Reload chats
+      const storedChats = dataService.getItem('pluto_live_chats');
+      if (storedChats) {
+        setChats(JSON.parse(storedChats));
+      }
+
+      // 5. Reload fees & user overrides
+      const storedFees = dataService.getItem('pluto_admin_fees');
+      if (storedFees) {
+        setFees(JSON.parse(storedFees));
+      }
+      setUserFeeOverrides(feeService.getAllUserFeeOverrides());
+
+      // 6. Reload asset config
+      setAssetConfig(loadAssetConfig());
+
+      setRefreshSuccess(true);
+      setTimeout(() => setRefreshSuccess(false), 3000);
+    } catch (err) {
+      console.error('Failed to refresh data from DB:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  // Realtime listener for background updates
+  useEffect(() => {
+    const handleUsersUpdated = () => {
+      setUsers(loadUsers());
+    };
+    const handleDataUpdated = (e: any) => {
+      if (e.detail?.key === 'pluto_admin_users') {
+        setUsers(loadUsers());
+      } else if (e.detail?.key === 'pluto_support_tickets' && e.detail?.value) {
+        try {
+          const val = typeof e.detail.value === 'string' ? JSON.parse(e.detail.value) : e.detail.value;
+          setTickets(val);
+        } catch {}
+      } else if (e.detail?.key === 'pluto_live_chats' && e.detail?.value) {
+        try {
+          const val = typeof e.detail.value === 'string' ? JSON.parse(e.detail.value) : e.detail.value;
+          setChats(val);
+        } catch {}
+      }
+    };
+
+    window.addEventListener('pluto_users_updated', handleUsersUpdated);
+    window.addEventListener('pluto_data_updated', handleDataUpdated);
+
+    return () => {
+      window.removeEventListener('pluto_users_updated', handleUsersUpdated);
+      window.removeEventListener('pluto_data_updated', handleDataUpdated);
+    };
+  }, []);
 
   // Scope for Fee & Deposit Configuration: 'global' or specific user ID
   const [selectedFeeUserId, setSelectedFeeUserId] = useState<string>('global');
@@ -1941,6 +2016,21 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* Refresh DB Button */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefreshData}
+                disabled={isRefreshing}
+                className="flex items-center gap-2 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition-all shadow-sm"
+                title="Refresh and fetch latest data from Supabase database"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-purple-600' : refreshSuccess ? 'text-green-500' : ''}`} />
+                <span className="hidden sm:inline font-medium text-xs">
+                  {isRefreshing ? 'Syncing...' : refreshSuccess ? 'Synced!' : 'Refresh DB'}
+                </span>
+              </Button>
+
               <Badge variant="secondary">{adminProfile.role}</Badge>
               
               {/* Admin Profile Dropdown */}
@@ -2093,10 +2183,22 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
               <div className="p-6 border-b border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between mb-4">
                   <h2 className="text-xl text-gray-900 dark:text-white">Users</h2>
-                  <Button onClick={() => setShowCreateUser(true)}>
-                    <Users className="w-4 h-4 mr-2" />
-                    Create User
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleRefreshData}
+                      disabled={isRefreshing}
+                      className="flex items-center gap-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200"
+                      title="Fetch latest users and balances from database"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-purple-600' : ''}`} />
+                      <span>{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
+                    </Button>
+                    <Button onClick={() => setShowCreateUser(true)}>
+                      <Users className="w-4 h-4 mr-2" />
+                      Create User
+                    </Button>
+                  </div>
                 </div>
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
