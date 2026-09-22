@@ -59,3 +59,19 @@ export function formatPercentage(value: number, includeSign: boolean = true): st
   }
   return `${formatted}%`;
 }
+
+/**
+ * Format a crypto price with appropriate decimal places based on magnitude
+ * e.g. BTC $86,443.76, SOL $118.25, XRP $1.59, ADA $0.2528, SHIB $0.000006
+ */
+export function formatCryptoPrice(price: number | string): string {
+  const num = typeof price === 'string' ? parseFloat(price) : price;
+  if (isNaN(num) || num <= 0) return '$0.00';
+  if (num >= 1) {
+    return `$${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  if (num >= 0.01) {
+    return `$${num.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+  }
+  return `$${num.toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 8 })}`;
+}

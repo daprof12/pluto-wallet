@@ -563,8 +563,8 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
               <div className="rounded-2xl bg-white dark:bg-gray-800 p-6 shadow-lg">
                 <PriceChart 
                   symbol={asset.symbol}
-                  currentPrice={parseFloat(asset.value.replace(/[^0-9.]/g, '')) / parseFloat(asset.balance)}
-                  priceChange={parseFloat(asset.change)}
+                  currentPrice={typeof asset.price === 'number' && asset.price > 0 ? asset.price : (parseFloat(asset.balance) > 0 ? parseFloat(asset.value.replace(/[^0-9.]/g, '')) / parseFloat(asset.balance) : 0)}
+                  priceChange={parseFloat(asset.change) || 0}
                   darkMode={isDark}
                 />
               </div>

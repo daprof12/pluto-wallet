@@ -39,8 +39,7 @@ import Logo from './Logo';
 import { loadAssetConfig, AssetConfig } from '../utils/assetConfig';
 import { ensureWalletAddresses } from '../utils/addressGenerator';
 import { useCryptoPrices } from '../hooks/useCryptoPrices';
-import { formatPercentage } from '../utils/formatNumber';
-import { formatBalance } from '../utils/formatNumber';
+import { formatPercentage, formatBalance, formatCryptoPrice } from '../utils/formatNumber';
 
 interface WalletDashboardProps {
   walletData: any;
@@ -160,10 +159,10 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
     }
   }, [walletData?.id]);
 
-  // Real-time cryptocurrency prices from CoinGecko
-  const { prices, priceChanges, loading: pricesLoading } = useCryptoPrices(
+  // Real-time cryptocurrency prices from multi-provider live service
+  const { prices, priceChanges, loading: pricesLoading, refetch: refetchPrices } = useCryptoPrices(
     assets.map(a => a.symbol),
-    60000 // Update every 60 seconds
+    30000 // Update every 30 seconds
   );
 
   const [assetFilterMode, setAssetFilterMode] = useState<'highest' | 'with_balance' | 'all'>('highest');
@@ -466,7 +465,10 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
               onClick={async () => {
                 setIsRefreshing(true);
                 try {
-                  await dataService.initCloudSync();
+                  await Promise.allSettled([
+                    dataService.initCloudSync(),
+                    refetchPrices()
+                  ]);
                   if (currentUserId) {
                     const freshTxs = await transactionService.fetchUserTransactions(currentUserId);
                     if (Array.isArray(freshTxs)) setUserTransactions(freshTxs);
@@ -639,6 +641,7 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                       symbol: asset.symbol,
                       name: asset.name,
                       balance: formatBalance(balance),
+                      price: price,
                       value: `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                       change: formatPercentage(change),
                       icon: asset.color,
@@ -674,7 +677,7 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <span className="text-sm text-gray-600 dark:text-gray-400">
-                                  ${price.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                  {formatCryptoPrice(price)}
                                 </span>
                                 <span className={`text-xs px-2 py-0.5 rounded font-medium ${change >= 0 ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}`}>
                                   {change >= 0 ? '+' : ''}{change.toFixed(1)}%

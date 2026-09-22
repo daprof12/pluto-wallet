@@ -25,7 +25,7 @@ import ReviewKycModal, { KycData } from './admin/ReviewKycModal';
 import { loadAssetConfig, saveAssetConfig, AssetConfig } from '../utils/assetConfig';
 import AssetLogo from './wallet/AssetLogo';
 import { fetchCryptoPrices } from '../utils/priceService';
-import { formatDecimal, formatPercentage, formatBalance } from '../utils/formatNumber';
+import { formatDecimal, formatPercentage, formatBalance, formatCryptoPrice } from '../utils/formatNumber';
 import MigrationPanel from './MigrationPanel';
 import { Switch } from './ui/switch';
 import AdminMessagesTab from './admin/AdminMessagesTab';
@@ -2745,7 +2745,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                             <div className="text-right">
                               <div className="flex items-center gap-2 justify-end mb-1">
                                 <span className="text-lg text-gray-900 dark:text-white font-medium">
-                                  ${(price || (asset.symbol.includes('USDT') ? 1.00 : 0)).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                  {formatCryptoPrice(price || (asset.symbol.includes('USDT') ? 1.00 : 0))}
                                 </span>
                                 <span className="bg-gray-900 dark:bg-black text-emerald-400 text-xs font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
                                   <TrendingUp className="w-3 h-3 text-emerald-400" />
@@ -3922,7 +3922,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                       </div>
                       <div className="mt-3 flex items-center justify-between text-xs">
                         <span className="text-gray-600 dark:text-gray-400">
-                          Price: ${price.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          Price: {formatCryptoPrice(price)}
                         </span>
                         <Badge variant={change >= 0 ? 'default' : 'destructive'} className="flex items-center gap-1">
                           {change >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
