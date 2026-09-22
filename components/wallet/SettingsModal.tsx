@@ -8,8 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Badge } from '../ui/badge';
 import { Switch } from '../ui/switch';
 import TwoFactorAuth from '../TwoFactorAuth';
-import { copyToClipboard } from '../../utils/clipboard';
 import { loadAssetConfig } from '../../utils/assetConfig';
+import AssetLogo from './AssetLogo';
 
 interface SettingsModalProps {
   walletData: any;
@@ -498,13 +498,15 @@ export default function SettingsModal({ walletData, onClose, onLogout, onUpdateW
                   >
                     <div className="flex items-center justify-between mb-3">
                       <div className="flex items-center gap-3">
-                        {chain.logoUrl ? (
-                          <img src={chain.logoUrl} alt={chain.name} className="w-10 h-10 rounded-full object-cover shrink-0" />
-                        ) : (
-                          <div className={`w-10 h-10 rounded-full ${chain.color} flex items-center justify-center text-white text-base font-bold shrink-0`}>
-                            {chain.icon || chain.symbol.charAt(0)}
-                          </div>
-                        )}
+                        <AssetLogo
+                          logoUrl={chain.logoUrl}
+                          name={chain.name}
+                          symbol={chain.symbol}
+                          color={chain.color}
+                          icon={chain.icon}
+                          size="w-10 h-10"
+                          textSize="text-base"
+                        />
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-gray-900 dark:text-white text-base">{chain.name}</span>

@@ -34,6 +34,7 @@ import UserFloatingChat from './wallet/UserFloatingChat';
 import QRScannerModal from './wallet/QRScannerModal';
 import AssetOverview from './wallet/AssetOverview';
 import TransactionReceiptModal from './wallet/TransactionReceiptModal';
+import AssetLogo from './wallet/AssetLogo';
 import Logo from './Logo';
 import { loadAssetConfig, AssetConfig } from '../utils/assetConfig';
 import { ensureWalletAddresses } from '../utils/addressGenerator';
@@ -651,13 +652,15 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                         onClick={() => handleAssetClick(assetData)}
                       >
                         <div className="flex items-center gap-4">
-                          {asset.logoUrl ? (
-                            <img src={asset.logoUrl} alt={asset.name} className="w-12 h-12 rounded-full object-cover shrink-0" />
-                          ) : (
-                            <div className={`w-12 h-12 rounded-full ${asset.color} flex items-center justify-center text-white text-xl font-bold shrink-0`}>
-                              {asset.icon || asset.symbol.charAt(0)}
-                            </div>
-                          )}
+                          <AssetLogo
+                            logoUrl={asset.logoUrl}
+                            name={asset.name}
+                            symbol={asset.symbol}
+                            color={asset.color}
+                            icon={asset.icon}
+                            size="w-12 h-12"
+                            textSize="text-xl"
+                          />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-2 truncate">

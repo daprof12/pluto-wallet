@@ -3,6 +3,7 @@ import bnbLogo from '../assets/bnb.png';
 import usdtLogo from '../assets/usdt.png';
 import ethLogo from '../assets/eth.png';
 import solLogo from '../assets/sol.png';
+import xrpLogo from '../assets/XRP.png';
 import dataService from './dataService';
 
 export interface AssetConfig {
@@ -16,6 +17,19 @@ export interface AssetConfig {
   enabled?: boolean; // Admin toggle for Shown on Home
 }
 
+// Built-in bundled logos map guaranteed to resolve in dev, build, and production
+export const defaultLogos: Record<string, string> = {
+  BTC: btcLogo,
+  ETH: ethLogo,
+  SOL: solLogo,
+  BNB: bnbLogo,
+  USDT: usdtLogo,
+  USDT_ERC20: usdtLogo,
+  USDT_BEP20: usdtLogo,
+  USDT_TRC20: usdtLogo,
+  XRP: xrpLogo
+};
+
 // Default asset configurations including popular USDT networks and major cryptocurrencies
 export const defaultAssetConfig: AssetConfig[] = [
   { symbol: 'BTC', name: 'Bitcoin', network: 'Bitcoin', color: 'bg-orange-500', icon: '₿', logoUrl: btcLogo, coinGeckoId: 'bitcoin', enabled: true },
@@ -26,7 +40,7 @@ export const defaultAssetConfig: AssetConfig[] = [
   { symbol: 'USDT_ERC20', name: 'Tether USD (ERC-20)', network: 'Ethereum', color: 'bg-emerald-600', icon: '₮', logoUrl: usdtLogo, coinGeckoId: 'tether', enabled: true },
   { symbol: 'USDT_BEP20', name: 'Tether USD (BEP-20)', network: 'BNB Smart Chain', color: 'bg-teal-600', icon: '₮', logoUrl: usdtLogo, coinGeckoId: 'tether', enabled: true },
   { symbol: 'USDC', name: 'USD Coin', network: 'Ethereum', color: 'bg-blue-500', icon: '$', logoUrl: '', coinGeckoId: 'usd-coin', enabled: true },
-  { symbol: 'XRP', name: 'Ripple', network: 'XRP Ledger', color: 'bg-zinc-800', icon: '✕', logoUrl: '', coinGeckoId: 'ripple', enabled: true },
+  { symbol: 'XRP', name: 'Ripple', network: 'XRP Ledger', color: 'bg-zinc-800', icon: '✕', logoUrl: xrpLogo, coinGeckoId: 'ripple', enabled: true },
   { symbol: 'ADA', name: 'Cardano', network: 'Cardano', color: 'bg-indigo-600', icon: '₳', logoUrl: '', coinGeckoId: 'cardano', enabled: true },
   { symbol: 'DOGE', name: 'Dogecoin', network: 'Dogecoin', color: 'bg-amber-500', icon: 'Ð', logoUrl: '', coinGeckoId: 'dogecoin', enabled: true },
   { symbol: 'TRX', name: 'TRON', network: 'TRON', color: 'bg-red-600', icon: 'T', logoUrl: '', coinGeckoId: 'tron', enabled: true },
@@ -54,10 +68,16 @@ export function loadAssetConfig(): AssetConfig[] {
         if (existingIdx === -1) {
           merged.push(defaultAsset);
         } else {
+          let logo = merged[existingIdx].logoUrl;
+          // If stored logo is missing, an obsolete localhost path, or a relative /assets path for a default coin,
+          // prefer the bundled Vite asset URL for 100% production reliability
+          if (!logo || logo.startsWith('/@fs') || logo.includes('localhost:5173') || (defaultLogos[defaultAsset.symbol] && !logo.startsWith('data:'))) {
+            logo = defaultLogos[defaultAsset.symbol] || defaultAsset.logoUrl;
+          }
           merged[existingIdx] = {
             ...defaultAsset,
             ...merged[existingIdx],
-            logoUrl: merged[existingIdx].logoUrl || defaultAsset.logoUrl,
+            logoUrl: logo,
             network: merged[existingIdx].network || defaultAsset.network,
             enabled: merged[existingIdx].enabled !== undefined ? merged[existingIdx].enabled : true
           };

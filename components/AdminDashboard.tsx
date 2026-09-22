@@ -23,6 +23,7 @@ import { copyToClipboard } from '../utils/clipboard';
 import EditFeeModal from './admin/EditFeeModal';
 import ReviewKycModal, { KycData } from './admin/ReviewKycModal';
 import { loadAssetConfig, saveAssetConfig, AssetConfig } from '../utils/assetConfig';
+import AssetLogo from './wallet/AssetLogo';
 import { fetchCryptoPrices } from '../utils/priceService';
 import { formatDecimal, formatPercentage, formatBalance } from '../utils/formatNumber';
 import MigrationPanel from './MigrationPanel';
@@ -1932,7 +1933,9 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const handleDeleteCoin = (symbol: string) => {
     if (confirm(`Are you sure you want to delete ${symbol}? This will affect all users holding this asset.`)) {
       // Remove from asset config
-      setAssetConfig(assetConfig.filter(a => a.symbol !== symbol));
+      const updated = assetConfig.filter(a => a.symbol !== symbol);
+      setAssetConfig(updated);
+      saveAssetConfig(updated);
       
       // Remove from prices
       const newPrices = { ...prices };
@@ -2013,11 +2016,13 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
     if (editingCoin) {
       // Update existing coin
-      setAssetConfig(assetConfig.map(a => 
+      const updated = assetConfig.map(a => 
         a.symbol === editingCoin.symbol 
           ? { ...a, ...coinForm, symbol } 
           : a
-      ));
+      );
+      setAssetConfig(updated);
+      saveAssetConfig(updated);
       
       // If symbol changed, update prices and fees keys
       if (editingCoin.symbol !== symbol) {
@@ -2122,7 +2127,9 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
         return;
       }
       
-      setAssetConfig([...assetConfig, { ...coinForm, symbol }]);
+      const updated = [...assetConfig, { ...coinForm, symbol }];
+      setAssetConfig(updated);
+      saveAssetConfig(updated);
       
       // Add default price
       const newPrices = { ...prices, [symbol]: 1.00 };
@@ -2193,11 +2200,28 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // In production, this would upload to storage
-      // For now, we'll use a local URL
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setCoinForm({ ...coinForm, logoUrl: reader.result as string });
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          // Resize to max 128x128 for crisp, lightweight storage without quota issues
+          const canvas = document.createElement('canvas');
+          const size = 128;
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            const minDim = Math.min(img.width, img.height);
+            const sx = (img.width - minDim) / 2;
+            const sy = (img.height - minDim) / 2;
+            ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
+            const optimizedDataUrl = canvas.toDataURL('image/png', 0.9);
+            setCoinForm(prev => ({ ...prev, logoUrl: optimizedDataUrl }));
+          } else {
+            setCoinForm(prev => ({ ...prev, logoUrl: event.target?.result as string }));
+          }
+        };
+        img.src = event.target?.result as string;
       };
       reader.readAsDataURL(file);
     }
@@ -2703,13 +2727,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                       <div key={asset.symbol} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl relative group">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
-                            {asset.logoUrl ? (
-                              <img src={asset.logoUrl} alt={asset.name} className="w-14 h-14 rounded-full object-cover" />
-                            ) : (
-                              <div className={`w-14 h-14 rounded-full ${asset.color} flex items-center justify-center text-white text-2xl`}>
-                                {asset.icon}
-                              </div>
-                            )}
+                            <AssetLogo
+                              logoUrl={asset.logoUrl}
+                              symbol={asset.symbol}
+                              name={asset.name}
+                              color={asset.color}
+                              icon={asset.icon}
+                              size="xl"
+                            />
                             <div>
                               <h3 className="text-lg text-gray-900 dark:text-white">{asset.name}</h3>
                               <p className="text-sm text-gray-600 dark:text-gray-400">{asset.symbol}</p>
@@ -2804,13 +2829,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                       <div key={asset.symbol}>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
-                            {asset.logoUrl ? (
-                              <img src={asset.logoUrl} alt={asset.name} className="w-8 h-8 rounded-full object-cover" />
-                            ) : (
-                              <div className={`w-8 h-8 rounded-full ${asset.color} flex items-center justify-center text-white text-sm`}>
-                                {asset.icon}
-                              </div>
-                            )}
+                            <AssetLogo
+                              logoUrl={asset.logoUrl}
+                              symbol={asset.symbol}
+                              name={asset.name}
+                              color={asset.color}
+                              icon={asset.icon}
+                              size="md"
+                            />
                             <span className="text-sm text-gray-900 dark:text-white">{asset.name}</span>
                           </div>
                           <span className="text-sm text-gray-600 dark:text-gray-400">
@@ -2972,13 +2998,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                     }`}>
                       <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
                         <div className="flex items-center gap-3">
-                          {assetInfo?.logoUrl ? (
-                            <img src={assetInfo.logoUrl} alt={assetInfo.name} className="w-12 h-12 rounded-full object-cover" />
-                          ) : (
-                            <div className={`w-12 h-12 rounded-full ${assetInfo?.color || 'bg-purple-600'} flex items-center justify-center text-white text-xl`}>
-                              {assetInfo?.icon || asset.charAt(0)}
-                            </div>
-                          )}
+                          <AssetLogo
+                            logoUrl={assetInfo?.logoUrl}
+                            symbol={asset}
+                            name={assetInfo?.name || asset}
+                            color={assetInfo?.color || 'bg-purple-600'}
+                            icon={assetInfo?.icon || asset.charAt(0)}
+                            size="lg"
+                          />
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
                               <h3 className="text-lg font-bold text-gray-900 dark:text-white">{assetInfo?.name || asset}</h3>
@@ -3871,13 +3898,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                     <div key={asset.symbol} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          {asset.logoUrl ? (
-                            <img src={asset.logoUrl} alt={asset.name} className="w-12 h-12 rounded-full object-cover" />
-                          ) : (
-                            <div className={`w-12 h-12 rounded-full ${asset.color} flex items-center justify-center text-white text-xl`}>
-                              {asset.icon}
-                            </div>
-                          )}
+                          <AssetLogo
+                            logoUrl={asset.logoUrl}
+                            symbol={asset.symbol}
+                            name={asset.name}
+                            color={asset.color}
+                            icon={asset.icon}
+                            size="lg"
+                          />
                           <div>
                             <h4 className="text-gray-900 dark:text-white">{asset.name}</h4>
                             <p className="text-sm text-gray-600 dark:text-gray-400">{asset.symbol}</p>
@@ -3961,13 +3989,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                       {/* Asset Header */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          {assetInfo?.logoUrl ? (
-                            <img src={assetInfo.logoUrl} alt={assetInfo.name} className="w-10 h-10 rounded-full object-cover shrink-0 shadow-xs" />
-                          ) : (
-                            <div className={`w-10 h-10 rounded-full ${assetInfo?.color || 'bg-purple-600'} flex items-center justify-center text-white font-bold text-sm shrink-0 shadow-xs`}>
-                              {assetInfo?.icon || asset.charAt(0)}
-                            </div>
-                          )}
+                          <AssetLogo
+                            logoUrl={assetInfo?.logoUrl}
+                            symbol={asset}
+                            name={assetInfo?.name || asset}
+                            color={assetInfo?.color || 'bg-purple-600'}
+                            icon={assetInfo?.icon || asset.charAt(0)}
+                            size="md"
+                          />
                           <div>
                             <div className="flex items-center gap-2">
                               <h4 className="font-bold text-gray-900 dark:text-white text-base leading-none">

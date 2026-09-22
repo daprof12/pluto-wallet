@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import TransactionReceiptModal from './TransactionReceiptModal';
 import { loadAssetConfig } from '../../utils/assetConfig';
+import AssetLogo from './AssetLogo';
 import PriceChart from './PriceChart';
 import { formatDecimal } from '../../utils/formatNumber';
 import transactionService from '../../utils/transactionService';
@@ -388,17 +389,18 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
             <>
               {/* Asset Balance */}
               <div className="text-center space-y-4">
-                {assetConfig?.logoUrl ? (
-                  <img 
-                    src={assetConfig.logoUrl} 
-                    alt={asset.name} 
-                    className="w-24 h-24 mx-auto rounded-full shadow-lg object-cover"
+                <div className="flex justify-center">
+                  <AssetLogo
+                    logoUrl={assetConfig?.logoUrl || asset.logoUrl}
+                    name={asset.name}
+                    symbol={asset.symbol}
+                    color={asset.icon}
+                    icon={asset.symbol.charAt(0)}
+                    size="w-24 h-24"
+                    textSize="text-5xl"
+                    className="shadow-lg"
                   />
-                ) : (
-                  <div className={`w-24 h-24 mx-auto rounded-full ${asset.icon} flex items-center justify-center text-5xl shadow-lg`}>
-                    {asset.symbol.charAt(0)}
-                  </div>
-                )}
+                </div>
                 <div>
                   <div className="text-4xl mb-2 text-gray-900 dark:text-white">{asset.balance} {asset.symbol}</div>
                   <div className="text-2xl text-gray-600 dark:text-gray-400">{asset.value}</div>

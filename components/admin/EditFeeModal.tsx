@@ -5,6 +5,7 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Switch } from '../ui/switch';
 import { loadAssetConfig } from '../../utils/assetConfig';
+import AssetLogo from '../wallet/AssetLogo';
 
 interface EditFeeModalProps {
   asset: string;
@@ -179,13 +180,13 @@ export default function EditFeeModal({
         <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-6 rounded-t-3xl">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {assetInfo?.logoUrl ? (
-                <img src={assetInfo.logoUrl} alt={assetInfo.name} className="w-12 h-12 rounded-full object-cover" />
-              ) : (
-                <div className={`w-12 h-12 rounded-full ${assetColor} flex items-center justify-center text-white text-xl`}>
-                  {assetIcon}
-                </div>
-              )}
+              <AssetLogo
+                logoUrl={assetInfo?.logoUrl}
+                symbol={asset}
+                color={assetColor}
+                icon={assetIcon}
+                size="lg"
+              />
               <div>
                 <h2 className="text-xl text-gray-900 dark:text-white">Edit Fee Settings</h2>
                 <div className="flex items-center gap-2 mt-0.5">

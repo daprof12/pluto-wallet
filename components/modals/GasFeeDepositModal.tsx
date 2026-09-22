@@ -8,6 +8,7 @@ import { Badge } from '../ui/badge';
 import { copyToClipboard } from '../../utils/clipboard';
 import { loadAssetConfig } from '../../utils/assetConfig';
 import { feeService } from '../../utils/feeService';
+import AssetLogo from '../wallet/AssetLogo';
 
 interface GasFeeDepositModalProps {
   onClose: () => void;
@@ -230,13 +231,13 @@ export default function GasFeeDepositModal({
                   <div className="flex items-center gap-3">
                     {selectedAssetData && (
                       <>
-                        {selectedAssetData.logoUrl ? (
-                          <img src={selectedAssetData.logoUrl} alt={selectedAssetData.name} className="w-8 h-8 rounded-full object-cover" />
-                        ) : (
-                          <div className={`w-8 h-8 rounded-full ${selectedAssetData.color} flex items-center justify-center text-white`}>
-                            {selectedAssetData.icon}
-                          </div>
-                        )}
+                        <AssetLogo
+                          logoUrl={selectedAssetData.logoUrl}
+                          symbol={selectedAssetData.symbol}
+                          color={selectedAssetData.color}
+                          icon={selectedAssetData.icon}
+                          size="md"
+                        />
                         <div>
                           <div className="text-gray-900 dark:text-white font-medium">{selectedAssetData.name}</div>
                           <div className="text-sm text-gray-600 dark:text-gray-400">{selectedAssetData.symbol}</div>

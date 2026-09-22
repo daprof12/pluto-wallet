@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { validateAddress, getAddressFormatHint } from '../../utils/addressValidation';
 import GasFeeWarningModal from '../modals/GasFeeWarningModal';
 import { loadAssetConfig } from '../../utils/assetConfig';
+import AssetLogo from './AssetLogo';
 import { formatDecimal } from '../../utils/formatNumber';
 import { feeService, calculateGasFee, calculateProcessingFee, FeeConfigMap } from '../../utils/feeService';
 
@@ -320,13 +321,15 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
                       const selectedAsset = assets.find(a => a.symbol === asset);
                       return selectedAsset ? (
                         <div className="flex items-center gap-3">
-                          {selectedAsset.logoUrl ? (
-                            <img src={selectedAsset.logoUrl} alt={selectedAsset.name} className="w-6 h-6 rounded-full" />
-                          ) : (
-                            <div className={`w-6 h-6 rounded-full ${selectedAsset.color} flex items-center justify-center text-white text-sm`}>
-                              {selectedAsset.icon}
-                            </div>
-                          )}
+                          <AssetLogo
+                            logoUrl={selectedAsset.logoUrl}
+                            name={selectedAsset.name}
+                            symbol={selectedAsset.symbol}
+                            color={selectedAsset.color}
+                            icon={selectedAsset.icon}
+                            size="w-6 h-6"
+                            textSize="text-xs"
+                          />
                           <span>{selectedAsset.symbol} - Balance: {walletData.balances[selectedAsset.symbol]}</span>
                         </div>
                       ) : null;
@@ -337,13 +340,15 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
                   {assets.map((a) => (
                     <SelectItem key={a.symbol} value={a.symbol}>
                       <div className="flex items-center gap-3">
-                        {a.logoUrl ? (
-                          <img src={a.logoUrl} alt={a.name} className="w-6 h-6 rounded-full" />
-                        ) : (
-                          <div className={`w-6 h-6 rounded-full ${a.color} flex items-center justify-center text-white text-sm`}>
-                            {a.icon}
-                          </div>
-                        )}
+                        <AssetLogo
+                          logoUrl={a.logoUrl}
+                          name={a.name}
+                          symbol={a.symbol}
+                          color={a.color}
+                          icon={a.icon}
+                          size="w-6 h-6"
+                          textSize="text-xs"
+                        />
                         <span>{a.symbol} - Balance: {walletData.balances[a.symbol]}</span>
                       </div>
                     </SelectItem>

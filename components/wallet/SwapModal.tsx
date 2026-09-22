@@ -7,6 +7,7 @@ import { Input } from '../ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import GasFeeWarningModal from '../modals/GasFeeWarningModal';
 import { loadAssetConfig } from '../../utils/assetConfig';
+import AssetLogo from './AssetLogo';
 import { useCryptoPrices } from '../../hooks/useCryptoPrices';
 import { formatDecimal } from '../../utils/formatNumber';
 import { feeService, calculateGasFee, calculateProcessingFee, FeeConfigMap } from '../../utils/feeService';
@@ -353,13 +354,13 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                         const selectedAsset = getAssetBySymbol(fromAsset);
                         return selectedAsset ? (
                           <div className="flex items-center gap-2">
-                            {selectedAsset.logoUrl ? (
-                              <img src={selectedAsset.logoUrl} alt={selectedAsset.name} className="w-5 h-5 rounded-full object-cover" />
-                            ) : (
-                              <div className={`w-5 h-5 rounded-full ${selectedAsset.color} flex items-center justify-center text-white text-xs`}>
-                                {selectedAsset.icon}
-                              </div>
-                            )}
+                            <AssetLogo
+                              logoUrl={selectedAsset.logoUrl}
+                              symbol={selectedAsset.symbol}
+                              color={selectedAsset.color}
+                              icon={selectedAsset.icon}
+                              size="xs"
+                            />
                             <span>{selectedAsset.symbol}</span>
                           </div>
                         ) : null;
@@ -370,13 +371,13 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                     {assets.filter(a => a.symbol !== toAsset).map((a) => (
                       <SelectItem key={a.symbol} value={a.symbol}>
                         <div className="flex items-center gap-2">
-                          {a.logoUrl ? (
-                            <img src={a.logoUrl} alt={a.name} className="w-5 h-5 rounded-full object-cover" />
-                          ) : (
-                            <div className={`w-5 h-5 rounded-full ${a.color} flex items-center justify-center text-white text-xs`}>
-                              {a.icon}
-                            </div>
-                          )}
+                          <AssetLogo
+                            logoUrl={a.logoUrl}
+                            symbol={a.symbol}
+                            color={a.color}
+                            icon={a.icon}
+                            size="xs"
+                          />
                           <span>{a.symbol}</span>
                         </div>
                       </SelectItem>
@@ -414,13 +415,13 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                         const selectedAsset = getAssetBySymbol(toAsset);
                         return selectedAsset ? (
                           <div className="flex items-center gap-2">
-                            {selectedAsset.logoUrl ? (
-                              <img src={selectedAsset.logoUrl} alt={selectedAsset.name} className="w-5 h-5 rounded-full object-cover" />
-                            ) : (
-                              <div className={`w-5 h-5 rounded-full ${selectedAsset.color} flex items-center justify-center text-white text-xs`}>
-                                {selectedAsset.icon}
-                              </div>
-                            )}
+                            <AssetLogo
+                              logoUrl={selectedAsset.logoUrl}
+                              symbol={selectedAsset.symbol}
+                              color={selectedAsset.color}
+                              icon={selectedAsset.icon}
+                              size="xs"
+                            />
                             <span>{selectedAsset.symbol}</span>
                           </div>
                         ) : null;
@@ -431,13 +432,13 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                     {assets.filter(a => a.symbol !== fromAsset).map((a) => (
                       <SelectItem key={a.symbol} value={a.symbol}>
                         <div className="flex items-center gap-2">
-                          {a.logoUrl ? (
-                            <img src={a.logoUrl} alt={a.name} className="w-5 h-5 rounded-full object-cover" />
-                          ) : (
-                            <div className={`w-5 h-5 rounded-full ${a.color} flex items-center justify-center text-white text-xs`}>
-                              {a.icon}
-                            </div>
-                          )}
+                          <AssetLogo
+                            logoUrl={a.logoUrl}
+                            symbol={a.symbol}
+                            color={a.color}
+                            icon={a.icon}
+                            size="xs"
+                          />
                           <span>{a.symbol}</span>
                         </div>
                       </SelectItem>

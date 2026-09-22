@@ -11,6 +11,7 @@ import { loadAssetConfig } from '../../utils/assetConfig';
 import { useCryptoPrices } from '../../hooks/useCryptoPrices';
 import { formatDecimal } from '../../utils/formatNumber';
 import { feeService } from '../../utils/feeService';
+import AssetLogo from './AssetLogo';
 import moonPayLogo from '../../assets/moonpay.png';
 import coinbaseLogo from '../../assets/coinbase.png';
 import transakLogo from '../../assets/Transak.png';
@@ -240,13 +241,13 @@ export default function BuyModal({ onClose, selectedAsset, walletData, onUpdateW
                   <SelectValue>
                     {selectedAssetData ? (
                       <div className="flex items-center gap-3">
-                        {selectedAssetData.logoUrl ? (
-                          <img src={selectedAssetData.logoUrl} alt={selectedAssetData.name} className="w-6 h-6 rounded-full object-cover" />
-                        ) : (
-                          <div className={`w-6 h-6 rounded-full ${selectedAssetData.color} flex items-center justify-center text-white text-sm`}>
-                            {selectedAssetData.icon}
-                          </div>
-                        )}
+                        <AssetLogo
+                          logoUrl={selectedAssetData.logoUrl}
+                          symbol={selectedAssetData.symbol}
+                          color={selectedAssetData.color}
+                          icon={selectedAssetData.icon}
+                          size="sm"
+                        />
                         <span>{selectedAssetData.name} ({selectedAssetData.symbol})</span>
                       </div>
                     ) : null}
@@ -256,13 +257,13 @@ export default function BuyModal({ onClose, selectedAsset, walletData, onUpdateW
                   {assets.map((a) => (
                     <SelectItem key={a.symbol} value={a.symbol}>
                       <div className="flex items-center gap-3">
-                        {a.logoUrl ? (
-                          <img src={a.logoUrl} alt={a.name} className="w-6 h-6 rounded-full object-cover" />
-                        ) : (
-                          <div className={`w-6 h-6 rounded-full ${a.color} flex items-center justify-center text-white text-sm`}>
-                            {a.icon}
-                          </div>
-                        )}
+                        <AssetLogo
+                          logoUrl={a.logoUrl}
+                          symbol={a.symbol}
+                          color={a.color}
+                          icon={a.icon}
+                          size="sm"
+                        />
                         <span>{a.name} ({a.symbol})</span>
                       </div>
                     </SelectItem>
