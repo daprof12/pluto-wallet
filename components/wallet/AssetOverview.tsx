@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ArrowLeft, TrendingUp, Coins, ArrowUpRight, ArrowDownLeft, RefreshCw, ShoppingCart, Eye, Edit, Trash2, ExternalLink, ChevronUp, ChevronDown, DollarSign } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
@@ -6,6 +6,7 @@ import TransactionReceiptModal from './TransactionReceiptModal';
 import { loadAssetConfig } from '../../utils/assetConfig';
 import PriceChart from './PriceChart';
 import { formatDecimal } from '../../utils/formatNumber';
+import transactionService from '../../utils/transactionService';
 
 interface Asset {
   symbol: string;
@@ -187,15 +188,16 @@ const getStatusColor = (status: string) => {
 };
 
 const getTransactionTypeLabel = (type: string) => {
-  switch (type) {
-    case 'admin_credit':
+  const clean = (type || '').toLowerCase().replace(/^admin_/, '');
+  switch (clean) {
+    case 'credit':
       return 'Credit';
-    case 'admin_debit':
+    case 'debit':
       return 'Debit';
     case 'gas_fee':
       return 'Gas Fee';
     default:
-      return type.charAt(0).toUpperCase() + type.slice(1);
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
   }
 };
 
@@ -209,12 +211,57 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
   const [showEditTransaction, setShowEditTransaction] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState<any>(null);
   
+  const [transactions, setTransactions] = useState<any[]>(() => walletData?.transactions || []);
+
+  const userId = walletData?.id || walletData?.userId;
+
+  useEffect(() => {
+    if (!userId) return;
+
+    const loadTxs = async () => {
+      try {
+        const txs = await transactionService.fetchUserTransactions(userId);
+        if (Array.isArray(txs)) {
+          setTransactions(txs);
+        }
+      } catch (e) {
+        console.warn('AssetOverview tx load error:', e);
+      }
+    };
+
+    loadTxs();
+
+    const handleUpdate = (e: any) => {
+      if (!e.detail || !e.detail.userId || e.detail.userId === userId) {
+        loadTxs();
+      }
+    };
+
+    window.addEventListener('pluto_transactions_updated', handleUpdate);
+    return () => {
+      window.removeEventListener('pluto_transactions_updated', handleUpdate);
+    };
+  }, [userId]);
+  
   // Load asset config to get logo
   const assetConfig = loadAssetConfig().find(a => a.symbol === asset.symbol);
   
-  // Filter transactions for current asset from wallet data
-  const filteredActivity = (walletData.transactions || [])
-    .filter((tx: any) => tx.asset === asset.symbol)
+  // Filter transactions for current asset from transactions or wallet data
+  const currentSym = (asset.symbol || '').toUpperCase();
+  const txList = transactions.length > 0 ? transactions : (walletData?.transactions || []);
+  const filteredActivity = txList
+    .filter((tx: any) => {
+      const txAsset = (tx.asset || '').toUpperCase();
+      const txToAsset = (tx.toAsset || '').toUpperCase();
+      const txFromAsset = (tx.fromAsset || '').toUpperCase();
+      const txRelated = (tx.relatedAsset || '').toUpperCase();
+
+      if (txAsset === currentSym) return true;
+      if (currentSym.startsWith('USDT') && txAsset.startsWith('USDT')) return true;
+      if (txToAsset === currentSym || txFromAsset === currentSym) return true;
+      if (txRelated === currentSym) return true;
+      return false;
+    })
     .sort((a: any, b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   const handleTimeframeChange = (newTimeframe: string) => {
@@ -253,17 +300,25 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
     setShowTransactionReceipt(false);
   };
 
-  const handleDeleteTransaction = (transactionId: string) => {
+  const handleDeleteTransaction = async (transactionId: string) => {
     if (confirm('Are you sure you want to delete this transaction? This action cannot be undone.')) {
-      // In a real app, this would call an API to delete the transaction
-      alert(`Transaction ${transactionId} deleted successfully`);
+      if (userId) {
+        await transactionService.deleteTransaction(transactionId, userId);
+      }
+      setTransactions(prev => prev.filter(t => t.id !== transactionId));
       setShowTransactionReceipt(false);
     }
   };
 
-  const handleSaveEditedTransaction = () => {
-    // In a real app, this would call an API to update the transaction
-    alert('Transaction updated successfully');
+  const handleSaveEditedTransaction = async () => {
+    if (!editingTransaction) return;
+    if (userId) {
+      await transactionService.saveTransaction(editingTransaction, userId);
+    }
+    setTransactions(prev => [
+      editingTransaction,
+      ...prev.filter(t => t.id !== editingTransaction.id)
+    ]);
     setShowEditTransaction(false);
     setEditingTransaction(null);
   };
@@ -405,14 +460,18 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
                   )}
                   {filteredActivity.map((tx) => {
                     const isPending = tx.status === 'pending' || tx.status === 'processing';
+                    const isDeduction = tx.type === 'send' || tx.type === 'gas_fee' || tx.type === 'admin_debit' || tx.type === 'debit';
                     
                     let Icon = RefreshCw;
-                    if (tx.type === 'receive') Icon = ArrowDownLeft;
-                    else if (tx.type === 'send') Icon = ArrowUpRight;
+                    if (tx.type === 'receive' || tx.type === 'deposit' || tx.type === 'admin_credit' || tx.type === 'credit') Icon = ArrowDownLeft;
+                    else if (tx.type === 'send' || tx.type === 'admin_debit' || tx.type === 'debit') Icon = ArrowUpRight;
                     else if (tx.type === 'swap') Icon = RefreshCw;
                     else if (tx.type === 'buy') Icon = DollarSign;
-                    else if (tx.type === 'admin_credit') Icon = Coins;
-                    else if (tx.type === 'admin_debit') Icon = Coins;
+                    else if (tx.type === 'gas_fee') Icon = ArrowUpRight;
+
+                    const displayHash = (tx.hash || '').length > 28
+                      ? `${tx.hash.substring(0, 16)}...${tx.hash.substring(tx.hash.length - 8)}`
+                      : (tx.hash || tx.id);
 
                     return (
                       <div 
@@ -428,8 +487,8 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
                               )}
                             </div>
                             <div>
-                              <p className="text-gray-900 dark:text-white">
-                                {getTransactionTypeLabel(tx.type).replace('Credit', 'Deposit')} {tx.asset}
+                              <p className="text-gray-900 dark:text-white font-medium">
+                                {getTransactionTypeLabel(tx.type)} {tx.asset}
                               </p>
                               <p className="text-sm text-gray-600 dark:text-gray-400">
                                 {new Date(tx.timestamp).toLocaleString()}
@@ -437,8 +496,8 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
                             </div>
                           </div>
                           <div className="text-right">
-                            <p className={`text-gray-900 dark:text-white ${tx.type === 'send' || tx.type === 'gas_fee' || tx.type === 'admin_debit' ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                              {tx.type === 'send' || tx.type === 'gas_fee' || tx.type === 'admin_debit' ? '-' : '+'}{formatDecimal(parseFloat(tx.amount))} {tx.asset}
+                            <p className={`font-semibold ${isDeduction ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                              {isDeduction ? '-' : '+'}{formatDecimal(parseFloat(tx.amount || '0'))} {tx.asset}
                             </p>
                             <div className="flex items-center gap-2 justify-end mt-1">
                               <Badge className={getStatusColor(tx.status)}>
@@ -454,7 +513,7 @@ export default function AssetOverview({ asset, onBack, isDark, walletData, onUpd
                         </div>
                         <div className="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-600">
                           <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate flex-1 mr-2">
-                            {tx.hash.substring(0, 20)}...{tx.hash.substring(tx.hash.length - 8)}
+                            {displayHash}
                           </p>
                           <div className="flex items-center gap-2 shrink-0">
                             {isAdmin && (

@@ -13,6 +13,7 @@ import { initializeAssetConfig } from './utils/assetConfig';
 import { useServiceWorker } from './hooks/useServiceWorker';
 import { storage, storageSync } from './utils/platform';
 import dataService from './utils/dataService';
+import { adminUserService, AdminUser } from './utils/adminUserService';
 
 type View = 'landing' | 'onboarding' | 'wallet' | 'admin' | 'adminLogin' | 'unlock' | '2fa-setup' | '2fa-auth' | 'import-auth' | 'privacy';
 
@@ -101,6 +102,7 @@ export default function App() {
   });
   const [importWalletData, setImportWalletData] = useState<any>(null); // Temporary storage for import authentication
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
+  const [currentAdmin, setCurrentAdmin] = useState<AdminUser | null>(() => adminUserService.getCurrentAdminSession());
 
   // Persist current view to sessionStorage whenever it changes
   useEffect(() => {
@@ -337,12 +339,15 @@ export default function App() {
   };
 
   const handleAdminLogin = () => {
+    setCurrentAdmin(adminUserService.getCurrentAdminSession());
     setView('admin');
   };
 
   const handleAdminLogout = () => {
     // Clear admin session
+    adminUserService.clearAdminSession();
     storage.remove('pluto_admin_session');
+    setCurrentAdmin(null);
     setIsImpersonatingUser(false);
     sessionStorage.removeItem('pluto_impersonating_user');
     setView('adminLogin');
@@ -562,6 +567,7 @@ export default function App() {
           darkMode={darkMode}
           onToggleDarkMode={toggleDarkMode}
           onLoginAsUser={handleAdminLoginAsUser}
+          currentAdmin={currentAdmin}
         />
       )}
 

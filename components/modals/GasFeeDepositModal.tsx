@@ -1,4 +1,5 @@
 import dataService from '../../utils/dataService';
+import transactionService from '../../utils/transactionService';
 import { useState, useEffect } from 'react';
 import { X, Copy, Check, Clock, ArrowRight, AlertCircle, CheckCircle2, DollarSign, CreditCard, ExternalLink } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -173,13 +174,9 @@ export default function GasFeeDepositModal({
     }
     dataService.setItem('pluto_wallet', JSON.stringify(updatedWallet));
 
-    // Sync to admin activities
-    const userActivities = JSON.parse(dataService.getItem('pluto_user_activities') || '{}');
-    if (!userActivities[walletData.id]) {
-      userActivities[walletData.id] = [];
-    }
-    userActivities[walletData.id].push(transaction);
-    dataService.setItem('pluto_user_activities', JSON.stringify(userActivities));
+    // Save transaction to Supabase & update local activities
+    const targetUserId = walletData.id || walletData.userId;
+    transactionService.saveTransaction(transaction, targetUserId);
 
     // Update admin users list
     const adminUsers = JSON.parse(dataService.getItem('pluto_admin_users') || '[]');

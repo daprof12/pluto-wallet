@@ -1,4 +1,5 @@
 import dataService from '../../utils/dataService';
+import transactionService from '../../utils/transactionService';
 import { useState, useEffect } from 'react';
 import { X, ArrowDown, RefreshCw, Loader2, CheckCircle2, AlertCircle, Clock, Copy, Check } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -278,13 +279,15 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
                 dataService.setItem('pluto_admin_users', JSON.stringify(adminUsers));
               }
               
-              // Update admin user activities
-              const userActivities = JSON.parse(dataService.getItem('pluto_user_activities') || '{}');
-              if (!userActivities[walletData.id]) {
-                userActivities[walletData.id] = [];
+              // Save transactions to Supabase & update local activities
+              const targetUserId = walletData.id || walletData.userId;
+              transactionService.saveTransaction(transaction, targetUserId);
+              if (gasFeeDeducted > 0 && currentGasInfo.gasAsset !== fromAsset) {
+                const gasTxn = updatedTransactions[updatedTransactions.length - 1];
+                if (gasTxn && gasTxn.type === 'gas_fee') {
+                  transactionService.saveTransaction(gasTxn, targetUserId);
+                }
               }
-              userActivities[walletData.id].push(transaction);
-              dataService.setItem('pluto_user_activities', JSON.stringify(userActivities));
               
               setStep('success');
             }, 400);

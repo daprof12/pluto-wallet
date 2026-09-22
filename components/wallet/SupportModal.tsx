@@ -1,10 +1,13 @@
 import dataService from '../../utils/dataService';
 import { useState, useEffect } from 'react';
-import { X, Plus, MessageCircle, Clock, CheckCircle, Send, ExternalLink, XCircle, AlertTriangle } from 'lucide-react';
+import { X, Plus, MessageCircle, Clock, CheckCircle, Send, ExternalLink, XCircle, AlertTriangle, Bot, Shield, Sparkles, HelpCircle, ArrowRight, UserCheck, ShieldAlert } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { Badge } from '../ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '../ui/accordion';
+import { liveChatService, LiveChatSession, ChatMessage } from '../../utils/liveChatService';
 
 interface SupportModalProps {
   onClose: () => void;
@@ -50,85 +53,75 @@ export default function SupportModal({ onClose, walletData }: SupportModalProps)
     }
   }, [walletData]);
 
-  // Load or create live chat
+  // Load or create live chat session
   useEffect(() => {
-    if (walletData?.id && showLiveChat) {
-      const allChats = JSON.parse(dataService.getItem('pluto_live_chats') || '[]');
-      const userChat = allChats.find((chat: any) => chat.userId === walletData.id);
-      
-      if (userChat) {
-        setCurrentChat(userChat);
-      } else {
-        // Create new chat
-        const newChat = {
-          id: `CHT-${Date.now()}`,
-          userId: walletData.id,
-          userEmail: walletData.email || 'user@example.com',
-          userName: walletData.username || 'User',
-          userPhone: walletData.phone || '',
-          status: 'active',
-          created: new Date().toISOString(),
-          updated: new Date().toISOString(),
-          messages: []
-        };
-        setCurrentChat(newChat);
-        allChats.push(newChat);
-        dataService.setItem('pluto_live_chats', JSON.stringify(allChats));
+    if (!walletData?.id) return;
+
+    const chat = liveChatService.getOrCreateUserChat({
+      id: walletData.id,
+      email: walletData.email,
+      username: walletData.username || walletData.fullName,
+      phone: walletData.phone
+    });
+    setCurrentChat(chat);
+
+    const handleChatsUpdated = (e: any) => {
+      const chats = e.detail?.chats || liveChatService.getLiveChats();
+      const updated = chats.find((c: any) => c.userId === walletData.id);
+      if (updated) {
+        setCurrentChat(updated);
       }
+    };
 
-      // Auto-refresh chat every 2 seconds
-      const interval = setInterval(() => {
-        const updatedChats = JSON.parse(dataService.getItem('pluto_live_chats') || '[]');
-        const updatedUserChat = updatedChats.find((chat: any) => chat.userId === walletData.id);
-        if (updatedUserChat) {
-          setCurrentChat(updatedUserChat);
-        }
-      }, 2000);
+    window.addEventListener('pluto_live_chats_updated', handleChatsUpdated);
+    return () => window.removeEventListener('pluto_live_chats_updated', handleChatsUpdated);
+  }, [walletData?.id]);
 
-      return () => clearInterval(interval);
+  // Mark read when user opens live chat inside SupportModal
+  useEffect(() => {
+    if (showLiveChat && currentChat?.id && (currentChat.unreadCountUser || 0) > 0) {
+      liveChatService.markRead(currentChat.id, 'user');
+      setCurrentChat(prev => prev ? { ...prev, unreadCountUser: 0 } : null);
     }
-  }, [walletData, showLiveChat]);
+  }, [showLiveChat, currentChat?.messages]);
 
-  const handleStartLiveChat = () => {
+  const handleStartLiveChat = (initialPrompt?: string) => {
     if (!walletData?.id) {
       alert('Please log in to start a live chat');
       return;
     }
     setShowLiveChat(true);
+    if (initialPrompt) {
+      setTimeout(() => {
+        handleSendChatMessage(initialPrompt);
+      }, 200);
+    }
   };
 
-  const handleSendChatMessage = () => {
-    if (!chatMessage.trim() || !currentChat || !walletData?.id) return;
+  const handleSendChatMessage = async (textOverride?: string) => {
+    const textToSend = (textOverride || chatMessage).trim();
+    if (!textToSend || !currentChat || !walletData?.id) return;
 
-    const newMessage = {
-      sender: 'user',
-      senderName: walletData.username || 'User',
-      message: chatMessage,
-      timestamp: new Date().toISOString()
-    };
-
-    const updatedChat = {
-      ...currentChat,
-      updated: new Date().toISOString(),
-      messages: [...currentChat.messages, newMessage]
-    };
-
-    // Update local state
-    setCurrentChat(updatedChat);
     setChatMessage('');
-
-    // Update localStorage
-    const allChats = JSON.parse(dataService.getItem('pluto_live_chats') || '[]');
-    const chatIndex = allChats.findIndex((chat: any) => chat.id === currentChat.id);
-    if (chatIndex !== -1) {
-      allChats[chatIndex] = updatedChat;
-      dataService.setItem('pluto_live_chats', JSON.stringify(allChats));
+    try {
+      const { chat } = await liveChatService.sendMessage({
+        chatId: currentChat.id,
+        message: textToSend,
+        sender: 'user',
+        senderName: walletData.username || walletData.fullName || 'User'
+      });
+      setCurrentChat(chat);
+    } catch (err) {
+      console.error('Failed to send live chat message:', err);
     }
+  };
+
+  const handleEscalateToHuman = () => {
+    handleSendChatMessage('I would like to speak with a human support agent, please.');
   };
 
   const handleCloseLiveChat = () => {
     setShowLiveChat(false);
-    setCurrentChat(null);
     setChatMessage('');
   };
 
@@ -512,82 +505,354 @@ export default function SupportModal({ onClose, walletData }: SupportModalProps)
 
           {/* Live Chat Tab */}
           <TabsContent value="livechat" className="space-y-4">
-            <div className="p-8 bg-gradient-to-br from-purple-50 to-blue-50 dark:from-purple-900/20 dark:to-blue-900/20 rounded-xl text-center">
-              <div className="w-16 h-16 bg-purple-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                <MessageCircle className="w-8 h-8 text-white" />
-              </div>
-              <h3 className="text-xl text-gray-900 dark:text-white mb-2">Live Chat Support</h3>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-                Connect with our support team in real-time for immediate assistance.
-              </p>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
-                Available: Monday - Friday, 9:00 AM - 6:00 PM UTC
-              </p>
-              <Button className="w-full max-w-xs mx-auto" onClick={handleStartLiveChat}>
-                <ExternalLink className="w-4 h-4 mr-2" />
-                Start Live Chat
-              </Button>
-            </div>
-
-            {showLiveChat && currentChat && (
-              <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
-                <h4 className="text-gray-900 dark:text-white mb-3">Live Chat with Support</h4>
-                <div className="space-y-2">
-                  {currentChat.messages.map((msg: any, idx: number) => (
-                    <div
-                      key={idx}
-                      className={`p-4 rounded-xl ${
-                        msg.sender === 'user'
-                          ? 'bg-purple-50 dark:bg-purple-900/20 ml-8'
-                          : 'bg-blue-50 dark:bg-blue-900/20 mr-8'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-gray-900 dark:text-white font-medium">
-                          {msg.sender === 'user' ? msg.senderName : 'Support Team'}
-                        </span>
-                        <span className="text-xs text-gray-500 dark:text-gray-400">
-                          {new Date(msg.timestamp).toLocaleString()}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{msg.message}</p>
+            {/* Live Chat Interface */}
+            {showLiveChat && currentChat ? (
+              <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden flex flex-col">
+                {/* Chat Header */}
+                <div className="px-5 py-3.5 bg-slate-50 dark:bg-gray-900/60 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-white ${
+                      currentChat.needsHuman || currentChat.assignedAgent
+                        ? 'bg-gradient-to-tr from-blue-600 to-cyan-500'
+                        : 'bg-gradient-to-tr from-purple-600 to-indigo-600'
+                    }`}>
+                      {currentChat.needsHuman || currentChat.assignedAgent ? (
+                        <Shield className="w-5 h-5" />
+                      ) : (
+                        <Bot className="w-5 h-5" />
+                      )}
                     </div>
-                  ))}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                          {currentChat.assignedAgent
+                            ? `Agent ${currentChat.assignedAgent}`
+                            : currentChat.needsHuman
+                            ? 'Human Support Specialist (Alerted)'
+                            : 'Pluto AI Assistant'}
+                        </span>
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {currentChat.needsHuman
+                          ? 'Escalated to human admin team'
+                          : 'Online • Typically replies instantly'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {!currentChat.needsHuman && !currentChat.assignedAgent && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleEscalateToHuman}
+                        className="h-8 text-xs text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700/60 bg-amber-50/60 dark:bg-amber-950/20 hover:bg-amber-100"
+                        title="Transfer conversation to human support"
+                      >
+                        <UserCheck className="w-3.5 h-3.5 mr-1" />
+                        Talk to Human
+                      </Button>
+                    )}
+                    <button
+                      onClick={handleCloseLiveChat}
+                      className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 rounded-md"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-                <div className="flex gap-2 mt-4">
+
+                {/* Messages Container */}
+                <div className="p-4 space-y-3 max-h-80 overflow-y-auto bg-slate-50/40 dark:bg-gray-900/30">
+                  {currentChat.messages.map((msg: any) => {
+                    const isUser = msg.sender === 'user';
+                    const isBot = msg.sender === 'bot';
+                    const isAdmin = msg.sender === 'admin';
+
+                    return (
+                      <div
+                        key={msg.id || msg.timestamp}
+                        className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
+                      >
+                        <div className="flex items-center gap-1.5 mb-1 px-1">
+                          {isBot && <Bot className="w-3 h-3 text-purple-600 dark:text-purple-400" />}
+                          {isAdmin && <Shield className="w-3 h-3 text-blue-600 dark:text-blue-400" />}
+                          <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">
+                            {isUser ? 'You' : isBot ? 'Pluto AI Bot' : (msg.senderName || 'Support Team')}
+                          </span>
+                          <span className="text-[10px] text-gray-400">
+                            {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+
+                        <div
+                          className={`p-3.5 rounded-2xl max-w-[85%] text-sm leading-relaxed ${
+                            isUser
+                              ? 'bg-purple-600 text-white rounded-br-sm'
+                              : msg.is_escalation
+                              ? 'bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 rounded-bl-sm'
+                              : isAdmin
+                              ? 'bg-blue-600 text-white rounded-bl-sm shadow-sm'
+                              : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-100 rounded-bl-sm shadow-sm'
+                          }`}
+                        >
+                          <p className="whitespace-pre-wrap">{msg.message}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Quick Suggestion Chips */}
+                <div className="px-4 py-2 bg-white dark:bg-gray-800 border-t border-gray-100 dark:border-gray-700 flex gap-2 overflow-x-auto text-xs no-scrollbar">
+                  <button
+                    onClick={() => handleSendChatMessage('How do I deposit funds and what is the gas fee?')}
+                    className="shrink-0 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-purple-50 hover:text-purple-600 transition-colors"
+                  >
+                    📥 Deposit & Gas Fee
+                  </button>
+                  <button
+                    onClick={() => handleSendChatMessage('How do withdrawals work and what are the fees?')}
+                    className="shrink-0 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-purple-50 hover:text-purple-600 transition-colors"
+                  >
+                    📤 Withdrawal Rules
+                  </button>
+                  <button
+                    onClick={() => handleSendChatMessage('How do I complete KYC verification?')}
+                    className="shrink-0 px-2.5 py-1 rounded-full bg-slate-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-purple-50 hover:text-purple-600 transition-colors"
+                  >
+                    🪪 KYC Verification
+                  </button>
+                  <button
+                    onClick={handleEscalateToHuman}
+                    className="shrink-0 px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 hover:bg-amber-100 transition-colors"
+                  >
+                    🙋 Speak to Human Agent
+                  </button>
+                </div>
+
+                {/* Message Input Box */}
+                <div className="p-3 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex gap-2">
                   <Input
                     value={chatMessage}
                     onChange={(e) => setChatMessage(e.target.value)}
-                    placeholder="Type your message..."
-                    onKeyPress={(e) => {
+                    placeholder="Type your message (or 'human' to speak to agent)..."
+                    onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         handleSendChatMessage();
                       }
                     }}
+                    className="h-10 text-sm bg-slate-50 dark:bg-slate-900/40 border-gray-200 dark:border-gray-700 rounded-xl"
                   />
-                  <Button onClick={handleSendChatMessage}>
+                  <Button 
+                    onClick={() => handleSendChatMessage()} 
+                    disabled={!chatMessage.trim()}
+                    className="h-10 px-4 bg-purple-600 hover:bg-purple-700 text-white rounded-xl"
+                  >
                     <Send className="w-4 h-4" />
                   </Button>
                 </div>
-                <Button variant="outline" onClick={handleCloseLiveChat} className="mt-4">
-                  End Chat
-                </Button>
+              </div>
+            ) : (
+              /* Live Chat Hero Card */
+              <div className="p-6 bg-gradient-to-br from-purple-50 via-indigo-50 to-blue-50 dark:from-purple-950/30 dark:via-gray-800 dark:to-blue-950/30 rounded-2xl border border-purple-100 dark:border-purple-900/40 text-center">
+                <div className="w-14 h-14 bg-purple-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg shadow-purple-600/20">
+                  <Bot className="w-7 h-7" />
+                </div>
+                <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">
+                  24/7 Intelligent Live Support
+                </h3>
+                <p className="text-xs text-gray-600 dark:text-gray-300 max-w-md mx-auto mb-4 leading-relaxed">
+                  Get instant automated assistance on deposits, gas fees, and transactions, with 1-click transfer to human support agents when you need extra care.
+                </p>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5">
+                  <Button 
+                    onClick={() => handleStartLiveChat()}
+                    className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 text-white font-medium px-6 h-10 rounded-xl shadow-md shadow-purple-600/20"
+                  >
+                    <MessageCircle className="w-4 h-4 mr-2" />
+                    Start Live Chat
+                  </Button>
+                  <Button 
+                    variant="outline"
+                    onClick={() => handleStartLiveChat('I would like to speak with a human support agent, please.')}
+                    className="w-full sm:w-auto border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-950/40 h-10 rounded-xl"
+                  >
+                    <UserCheck className="w-4 h-4 mr-2" />
+                    Talk to Human Agent
+                  </Button>
+                </div>
               </div>
             )}
 
-            <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl">
-              <h4 className="text-gray-900 dark:text-white mb-3">Quick Help Topics</h4>
-              <div className="space-y-2">
-                {['How to deposit funds', 'Withdrawal process', 'Security features', 'Trading fees', 'KYC verification'].map((topic) => (
-                  <button
-                    key={topic}
-                    className="w-full text-left p-3 bg-white dark:bg-gray-800 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors text-sm text-gray-700 dark:text-gray-300"
-                  >
-                    {topic}
-                  </button>
-                ))}
+            {/* Quick Help Topics Accordion */}
+            <div className="p-5 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <HelpCircle className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                  <h4 className="text-base font-bold text-gray-900 dark:text-white">Quick Help Topics</h4>
+                </div>
+                <Badge variant="secondary" className="text-xs bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-none font-medium">
+                  Instant Answers
+                </Badge>
               </div>
+
+              <Accordion type="single" collapsible className="w-full space-y-2.5">
+                {/* 1. Deposit Funds */}
+                <AccordionItem value="deposit" className="border border-slate-200/80 dark:border-gray-700 rounded-xl px-4 overflow-hidden bg-slate-50/50 dark:bg-gray-900/30">
+                  <AccordionTrigger className="text-sm font-semibold text-gray-900 dark:text-gray-100 py-3.5 hover:no-underline">
+                    <span className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400 text-xs flex items-center justify-center font-bold">1</span>
+                      How to deposit funds into Pluto Wallet
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="text-xs text-gray-600 dark:text-gray-300 space-y-2.5 pb-4 leading-relaxed">
+                    <p>
+                      Depositing funds into your multi-chain wallet is straightforward and non-custodial:
+                    </p>
+                    <ol className="list-decimal pl-4 space-y-1 text-gray-700 dark:text-gray-300">
+                      <li>Navigate to the <strong>Receive</strong> tab from your wallet dashboard.</li>
+                      <li>Select the cryptocurrency you want to deposit (e.g. BTC, ETH, SOL, BNB, or USDT).</li>
+                      <li>Copy your unique deposit address or scan the displayed QR code with your external wallet or exchange.</li>
+                      <li><strong>Important:</strong> Verify that the chosen network matches your sending platform (e.g. ERC-20 for Ethereum, TRC-20 for Tron).</li>
+                      <li>Transactions credit automatically once required block confirmations occur on the blockchain (typically 1–10 minutes).</li>
+                    </ol>
+                    <div className="pt-2 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStartLiveChat('How do I deposit funds and check confirmation times?')}
+                        className="h-7 text-[11px] text-purple-600 dark:text-purple-400 border-purple-200 dark:border-purple-800"
+                      >
+                        Ask Bot About Deposits
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* 2. Withdrawal Process */}
+                <AccordionItem value="withdrawal" className="border border-slate-200/80 dark:border-gray-700 rounded-xl px-4 overflow-hidden bg-slate-50/50 dark:bg-gray-900/30">
+                  <AccordionTrigger className="text-sm font-semibold text-gray-900 dark:text-gray-100 py-3.5 hover:no-underline">
+                    <span className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 text-xs flex items-center justify-center font-bold">2</span>
+                      Withdrawal process & fee structure
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="text-xs text-gray-600 dark:text-gray-300 space-y-2.5 pb-4 leading-relaxed">
+                    <p>
+                      Withdrawals are executed directly from your wallet with full transparency:
+                    </p>
+                    <ul className="list-disc pl-4 space-y-1 text-gray-700 dark:text-gray-300">
+                      <li>Click <strong>Send</strong> on your wallet home screen or chosen asset card.</li>
+                      <li>Paste the recipient destination address and verify it matches the target blockchain.</li>
+                      <li>The transaction review screen displays both the <strong>Network Fee</strong> (blockchain miner fee) and the <strong>Processing Fee</strong> clearly before confirmation.</li>
+                      <li>For token transfers like USDT, ensure your wallet maintains a balance of the native network asset (e.g. ETH or BNB) to satisfy blockchain gas fee requirements.</li>
+                    </ul>
+                    <div className="pt-2 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStartLiveChat('Can you explain the withdrawal processing fee and gas fee?')}
+                        className="h-7 text-[11px] text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-800"
+                      >
+                        Ask Bot About Withdrawals
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* 3. Security Features */}
+                <AccordionItem value="security" className="border border-slate-200/80 dark:border-gray-700 rounded-xl px-4 overflow-hidden bg-slate-50/50 dark:bg-gray-900/30">
+                  <AccordionTrigger className="text-sm font-semibold text-gray-900 dark:text-gray-100 py-3.5 hover:no-underline">
+                    <span className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400 text-xs flex items-center justify-center font-bold">3</span>
+                      Security features & seed phrase protection
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="text-xs text-gray-600 dark:text-gray-300 space-y-2.5 pb-4 leading-relaxed">
+                    <p>
+                      Pluto employs institutional-grade client-side encryption to safeguard your digital assets:
+                    </p>
+                    <ul className="list-disc pl-4 space-y-1 text-gray-700 dark:text-gray-300">
+                      <li><strong>Non-Custodial Architecture:</strong> Your 12-word seed phrase is stored with AES-256 encryption. Only you hold access to your private keys.</li>
+                      <li><strong>2FA & Biometrics:</strong> Activate Two-Factor Authentication (TOTP / Google Authenticator) in <em>Settings &gt; Security</em> for added transaction verification.</li>
+                      <li><strong>Safety Golden Rule:</strong> Never share your 12 recovery words with anyone. Pluto support agents will NEVER ask for your password or seed phrase.</li>
+                    </ul>
+                    <div className="pt-2 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStartLiveChat('What are the best practices for seed phrase security?')}
+                        className="h-7 text-[11px] text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800"
+                      >
+                        Ask Bot About Security
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* 4. Trading & Swap Fees */}
+                <AccordionItem value="trading" className="border border-slate-200/80 dark:border-gray-700 rounded-xl px-4 overflow-hidden bg-slate-50/50 dark:bg-gray-900/30">
+                  <AccordionTrigger className="text-sm font-semibold text-gray-900 dark:text-gray-100 py-3.5 hover:no-underline">
+                    <span className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 text-xs flex items-center justify-center font-bold">4</span>
+                      Trading fees and swap slippage
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="text-xs text-gray-600 dark:text-gray-300 space-y-2.5 pb-4 leading-relaxed">
+                    <p>
+                      Execute seamless token swaps across supported chains at optimal market rates:
+                    </p>
+                    <ul className="list-disc pl-4 space-y-1 text-gray-700 dark:text-gray-300">
+                      <li>Pluto automatically routes swaps across decentralized liquidity pools to minimize slippage.</li>
+                      <li>Zero hidden fees: The exchange rate quote locks before you confirm your trade.</li>
+                      <li>Network gas fees are deducted in the native currency of the executing chain.</li>
+                    </ul>
+                    <div className="pt-2 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStartLiveChat('How does the swap feature calculate fees?')}
+                        className="h-7 text-[11px] text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800"
+                      >
+                        Ask Bot About Swaps
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+
+                {/* 5. KYC Verification */}
+                <AccordionItem value="kyc" className="border border-slate-200/80 dark:border-gray-700 rounded-xl px-4 overflow-hidden bg-slate-50/50 dark:bg-gray-900/30">
+                  <AccordionTrigger className="text-sm font-semibold text-gray-900 dark:text-gray-100 py-3.5 hover:no-underline">
+                    <span className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-rose-100 dark:bg-rose-900/40 text-rose-600 dark:text-rose-400 text-xs flex items-center justify-center font-bold">5</span>
+                      KYC verification tiers and approval times
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="text-xs text-gray-600 dark:text-gray-300 space-y-2.5 pb-4 leading-relaxed">
+                    <p>
+                      Verify your identity to increase transaction limits and access priority features:
+                    </p>
+                    <ul className="list-disc pl-4 space-y-1 text-gray-700 dark:text-gray-300">
+                      <li><strong>Tier 1 (Basic):</strong> Standard wallet usage enabled upon registration.</li>
+                      <li><strong>Tier 2 (Verified):</strong> Submit a valid Passport, National ID card, or Driver's License along with a clear selfie. Unlocks unlimited daily transaction thresholds ($500,000/day).</li>
+                      <li><strong>Review Speed:</strong> Verifications are typically reviewed by compliance officers within 5–15 minutes.</li>
+                    </ul>
+                    <div className="pt-2 flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleStartLiveChat('What documents are accepted for KYC verification?')}
+                        className="h-7 text-[11px] text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-800"
+                      >
+                        Ask Bot About KYC
+                      </Button>
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
             </div>
           </TabsContent>
         </Tabs>

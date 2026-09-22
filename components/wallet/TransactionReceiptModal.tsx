@@ -50,15 +50,16 @@ const getStatusColor = (status: string) => {
 };
 
 const getTransactionTypeLabel = (type: string) => {
-  switch (type) {
-    case 'admin_credit':
+  const clean = (type || '').toLowerCase().replace(/^admin_/, '');
+  switch (clean) {
+    case 'credit':
       return 'Credit';
-    case 'admin_debit':
+    case 'debit':
       return 'Debit';
     case 'gas_fee':
       return 'Gas Fee';
     default:
-      return type.charAt(0).toUpperCase() + type.slice(1);
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
   }
 };
 
@@ -179,7 +180,7 @@ export default function TransactionReceiptModal({
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Transaction Type</p>
-                <p className="text-sm text-gray-900 dark:text-white">{getTransactionTypeLabel(transaction.type).replace('Credit', 'Deposit')}</p>
+                <p className="text-sm text-gray-900 dark:text-white">{getTransactionTypeLabel(transaction.type)}</p>
               </div>
               <div>
                 <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Asset</p>
@@ -240,7 +241,7 @@ export default function TransactionReceiptModal({
               {transaction.notes && (
                 <div className="col-span-2">
                   <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">Notes</p>
-                  <p className="text-sm text-gray-900 dark:text-white">{transaction.notes.replace(/Admin /g, '').replace(/credited/gi, 'deposited')}</p>
+                  <p className="text-sm text-gray-900 dark:text-white">{transaction.notes.replace(/Admin /gi, '')}</p>
                 </div>
               )}
               <div>

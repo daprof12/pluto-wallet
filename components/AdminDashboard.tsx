@@ -1,5 +1,6 @@
 import dataService from '../utils/dataService';
-import { useState, useEffect } from 'react';
+import transactionService from '../utils/transactionService';
+import { useState, useEffect, useMemo } from 'react';
 import { Users, DollarSign, Settings, FileText, ArrowLeft, Shield, Search, MoreVertical, Edit, Edit2, Trash, Lock, Unlock, Eye, EyeOff, Activity, Coins, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownLeft, RefreshCw, Check, Copy, Headphones, MessageCircle, Send, Phone, Mail, Clock, AlertCircle, CheckCircle, XCircle, User, LogOut, KeyRound, Moon, Sun, Database, LogIn, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -27,17 +28,22 @@ import { formatDecimal, formatPercentage, formatBalance } from '../utils/formatN
 import MigrationPanel from './MigrationPanel';
 import { Switch } from './ui/switch';
 import AdminMessagesTab from './admin/AdminMessagesTab';
+import AdminUsersTab from './admin/AdminUsersTab';
+import AdminLiveChatView from './admin/AdminLiveChatView';
 import { feeService, UserFeeOverride } from '../utils/feeService';
 import { supabase, isSupabaseConfigured } from '../utils/supabaseClient';
+import { adminUserService, AdminUser, AdminTabPermission } from '../utils/adminUserService';
+import { liveChatService } from '../utils/liveChatService';
 
 interface AdminDashboardProps {
   onBack: () => void;
   darkMode?: boolean;
   onToggleDarkMode?: () => void;
   onLoginAsUser?: (user: any) => void;
+  currentAdmin?: AdminUser | null;
 }
 
-export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkMode, onLoginAsUser }: AdminDashboardProps) {
+export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkMode, onLoginAsUser, currentAdmin }: AdminDashboardProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [showUserDetails, setShowUserDetails] = useState(false);
@@ -47,6 +53,9 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const [customMessageText, setCustomMessageText] = useState('We are currently experiencing high transaction traffic, please try again later');
   const [showEditBalance, setShowEditBalance] = useState(false);
   const [showUserActivities, setShowUserActivities] = useState(false);
+  const [activityAssetFilter, setActivityAssetFilter] = useState('ALL');
+  const [activityDateFilter, setActivityDateFilter] = useState('');
+  const [activityDatePreset, setActivityDatePreset] = useState<'all' | 'today' | '7d' | '30d'>('all');
   const [showTransactionReceipt, setShowTransactionReceipt] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
   const [showLoginDetailsEdit, setShowLoginDetailsEdit] = useState(false);
@@ -80,11 +89,64 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   const [newUserAddressErrors, setNewUserAddressErrors] = useState<{[key: string]: string}>({});
   const [showAdminSettings, setShowAdminSettings] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
-  const [adminProfile, setAdminProfile] = useState({
-    name: 'Super Admin',
-    email: 'admin@pluto.io',
-    role: 'Super Admin'
+
+  // Active Admin Session & Permissions
+  const [activeAdmin, setActiveAdmin] = useState<AdminUser | null>(() => {
+    return currentAdmin || adminUserService.getCurrentAdminSession() || adminUserService.getAdminUsers()[0];
   });
+
+  useEffect(() => {
+    if (currentAdmin) {
+      setActiveAdmin(currentAdmin);
+    } else {
+      const sess = adminUserService.getCurrentAdminSession();
+      if (sess) setActiveAdmin(sess);
+    }
+  }, [currentAdmin]);
+
+  useEffect(() => {
+    const handleAdminSync = () => {
+      const sess = adminUserService.getCurrentAdminSession();
+      if (sess) setActiveAdmin(sess);
+    };
+    window.addEventListener('pluto_admin_users_updated', handleAdminSync);
+    return () => window.removeEventListener('pluto_admin_users_updated', handleAdminSync);
+  }, []);
+
+  const isSuperAdmin = !activeAdmin || activeAdmin.role === 'super_admin';
+
+  const canAccessTab = (tabId: string): boolean => {
+    if (isSuperAdmin) return true;
+    if (tabId === 'adminUsers') return false; // Restricted admins never access adminUsers tab
+    return activeAdmin?.permissions?.includes(tabId as AdminTabPermission) || false;
+  };
+
+  // If active tab is not allowed for restricted admin, switch to first allowed tab
+  useEffect(() => {
+    if (!canAccessTab(activeTab)) {
+      const tabOrder = ['users', 'assets', 'fees', 'support', 'messages', 'chat', 'audit', 'sync'];
+      const firstAllowed = tabOrder.find(t => canAccessTab(t));
+      if (firstAllowed) {
+        setActiveTab(firstAllowed);
+      }
+    }
+  }, [activeAdmin, activeTab]);
+
+  const [adminProfile, setAdminProfile] = useState(() => ({
+    name: activeAdmin?.email ? activeAdmin.email.split('@')[0] : 'Super Admin',
+    email: activeAdmin?.email || 'admin@pluto.io',
+    role: isSuperAdmin ? 'Super Admin' : 'Restricted Admin'
+  }));
+
+  useEffect(() => {
+    if (activeAdmin) {
+      setAdminProfile({
+        name: activeAdmin.email.split('@')[0],
+        email: activeAdmin.email,
+        role: activeAdmin.role === 'super_admin' ? 'Super Admin' : 'Restricted Admin'
+      });
+    }
+  }, [activeAdmin]);
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
     newPassword: '',
@@ -670,7 +732,42 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
   const [userActivities, setUserActivities] = useState<{[key: string]: any[]}>(loadUserActivities());
 
-  const getUserActivities = (userId: string) => userActivities[userId] || [];
+  // Load all activities from Supabase on mount and listen for real-time changes
+  useEffect(() => {
+    let isSubscribed = true;
+    const fetchActivities = async () => {
+      try {
+        const actMap = await transactionService.fetchUserActivitiesMap();
+        if (isSubscribed && actMap) {
+          setUserActivities(prev => ({ ...prev, ...actMap }));
+        }
+      } catch (err) {
+        console.warn('Failed to load user activities from Supabase:', err);
+      }
+    };
+    fetchActivities();
+
+    const handleTxUpdate = () => {
+      fetchActivities();
+    };
+
+    window.addEventListener('pluto_transactions_updated', handleTxUpdate);
+    return () => {
+      isSubscribed = false;
+      window.removeEventListener('pluto_transactions_updated', handleTxUpdate);
+    };
+  }, []);
+
+  const getUserActivities = (userId: string) => {
+    const list = userActivities[userId] || [];
+    return list.filter((act: any) => {
+      if (!act || typeof act !== 'object') return false;
+      const t = (act.type || '').toLowerCase();
+      // Exclude KYC, audit, login, or security records that are not asset transactions
+      if (t === 'kyc_review' || t === 'kyc' || t === 'login' || t === 'security') return false;
+      return true;
+    });
+  };
   
   // Update user activities and persist to localStorage
   const updateUserActivities = (userId: string, activities: any[]) => {
@@ -683,8 +780,9 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   };
   
   // Delete a specific transaction
-  const handleDeleteTransaction = (userId: string, transactionId: string) => {
+  const handleDeleteTransaction = async (userId: string, transactionId: string) => {
     if (confirm('Are you sure you want to delete this transaction?')) {
+      await transactionService.deleteTransaction(transactionId, userId);
       const userTransactions = getUserActivities(userId);
       const updatedTransactions = userTransactions.filter(tx => tx.id !== transactionId);
       updateUserActivities(userId, updatedTransactions);
@@ -692,22 +790,39 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   };
   
   // Update transaction status
-  const handleUpdateTransactionStatus = (userId: string, transactionId: string, newStatus: string) => {
+  const handleUpdateTransactionStatus = async (userId: string, transactionId: string, newStatus: string) => {
+    await transactionService.updateTransactionStatus(transactionId, newStatus, userId);
     const userTransactions = getUserActivities(userId);
     const updatedTransactions = userTransactions.map(tx => 
       tx.id === transactionId ? { ...tx, status: newStatus } : tx
     );
     updateUserActivities(userId, updatedTransactions);
+    setSelectedTransaction((prev: any) => (prev && prev.id === transactionId ? { ...prev, status: newStatus } : prev));
   };
 
-  // Calculate total balance in USD
+  // Calculate total balance in USD safely (prevents $NaN)
   const calculateTotalBalance = (balances: any) => {
+    if (!balances || typeof balances !== 'object') return 0;
     let total = 0;
     Object.entries(balances).forEach(([asset, balance]) => {
-      const price = prices[asset as keyof typeof prices] || 0;
-      total += parseFloat(balance as string) * price;
+      const rawStr = (balance !== null && balance !== undefined ? balance : '0').toString().trim();
+      const val = parseFloat(rawStr);
+      if (isNaN(val) || val <= 0) return;
+
+      let price = prices[asset as keyof typeof prices];
+      if (price === undefined || isNaN(price) || price === 0) {
+        if (asset.startsWith('USDT') || asset.startsWith('USDC')) {
+          price = 1.0;
+        } else {
+          price = 0;
+        }
+      }
+      const itemVal = val * price;
+      if (!isNaN(itemVal) && isFinite(itemVal)) {
+        total += itemVal;
+      }
     });
-    return total;
+    return isNaN(total) || !isFinite(total) ? 0 : total;
   };
 
   // Calculate total platform assets
@@ -722,15 +837,18 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     });
 
     users.forEach(user => {
+      if (!user.balances || typeof user.balances !== 'object') return;
       Object.entries(user.balances).forEach(([asset, balance]) => {
         if (totals[asset]) {
-          const bal = parseFloat(balance as string || '0');
-          totals[asset].total += bal;
-          if (bal > 0) {
+          const rawStr = (balance !== null && balance !== undefined ? balance : '0').toString().trim();
+          const bal = parseFloat(rawStr);
+          const validBal = isNaN(bal) || bal < 0 ? 0 : bal;
+          totals[asset].total += validBal;
+          if (validBal > 0) {
             totals[asset].users += 1;
           }
           const price = prices[asset as keyof typeof prices] || (asset.includes('USDT') ? 1.00 : 0);
-          totals[asset].value += bal * price;
+          totals[asset].value += validBal * (isNaN(price) ? 0 : price);
         }
       });
     });
@@ -818,24 +936,32 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     setTicketResponse('');
   };
 
-  // Load live chats from localStorage
-  const [chats, setChats] = useState<any[]>([]);
+  // Load live chats from service
+  const [chats, setChats] = useState<any[]>(() => liveChatService.getLiveChats());
   const [chatStatusFilter, setChatStatusFilter] = useState<'all' | 'active' | 'resolved'>('all');
 
-  // Load chats from localStorage
+  // Load chats from service & sync
   useEffect(() => {
     const loadChats = () => {
-      const storedChats = dataService.getItem('pluto_live_chats');
-      if (storedChats) {
-        setChats(JSON.parse(storedChats));
-      }
+      const stored = liveChatService.getLiveChats();
+      setChats(stored);
     };
 
     loadChats();
     
     // Auto-refresh chats every 2 seconds
     const interval = setInterval(loadChats, 2000);
-    return () => clearInterval(interval);
+
+    const handleUpdate = (e: any) => {
+      const updated = e.detail?.chats || liveChatService.getLiveChats();
+      setChats(updated);
+    };
+
+    window.addEventListener('pluto_live_chats_updated', handleUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('pluto_live_chats_updated', handleUpdate);
+    };
   }, []);
 
   // Load audit logs from localStorage or use defaults
@@ -1008,9 +1134,20 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     }, 2000);
   };
 
-  const handleViewActivities = (user: any) => {
+  const handleViewActivities = async (user: any) => {
     setSelectedUser(user);
+    setActivityAssetFilter('ALL');
+    setActivityDateFilter('');
+    setActivityDatePreset('all');
     setShowUserActivities(true);
+    try {
+      const userTxns = await transactionService.fetchUserTransactions(user.id);
+      if (Array.isArray(userTxns)) {
+        setUserActivities(prev => ({ ...prev, [user.id]: userTxns }));
+      }
+    } catch (err) {
+      console.warn('Failed to fetch user activities:', err);
+    }
   };
 
   const handleBlockUser = (userId: string) => {
@@ -1299,14 +1436,11 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
         }
       }
       
-      // Update admin user activities with new transactions
+      // Save balance change transactions to Supabase & update activities
       if (balanceChangeTransactions.length > 0) {
-        const userActivities = JSON.parse(dataService.getItem('pluto_user_activities') || '{}');
-        if (!userActivities[selectedUser.id]) {
-          userActivities[selectedUser.id] = [];
+        for (const bTx of balanceChangeTransactions) {
+          await transactionService.saveTransaction(bTx, selectedUser.id);
         }
-        userActivities[selectedUser.id].push(...balanceChangeTransactions);
-        await dataService.setItemAsync('pluto_user_activities', JSON.stringify(userActivities));
       }
       
       setShowEditBalance(false);
@@ -2075,10 +2209,11 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     setEditingTransaction(false);
   };
 
-  const handleUpdateTransaction = (userId: string, updatedTransaction: any) => {
+  const handleUpdateTransaction = async (userId: string, updatedTransaction: any) => {
+    await transactionService.saveTransaction(updatedTransaction, userId);
     const updatedActivities = {
       ...userActivities,
-      [userId]: userActivities[userId].map(txn =>
+      [userId]: (userActivities[userId] || []).map(txn =>
         txn.id === updatedTransaction.id ? updatedTransaction : txn
       )
     };
@@ -2105,18 +2240,44 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     }
   };
 
-  const filteredUsers = users.filter(u =>
+  // User assignment scoping: restricted admins only see assigned users
+  const scopedUsers = useMemo(() => {
+    if (isSuperAdmin) return users;
+    return users.filter(u => adminUserService.isUserAssigned(activeAdmin, u.id, u.email));
+  }, [users, activeAdmin, isSuperAdmin]);
+
+  const filteredUsers = scopedUsers.filter(u =>
     u.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
     u.id.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // Tickets scoping
+  const scopedTickets = useMemo(() => {
+    if (isSuperAdmin) return tickets;
+    return tickets.filter(t => adminUserService.isUserAssigned(activeAdmin, t.userId, t.userEmail));
+  }, [tickets, activeAdmin, isSuperAdmin]);
+
+  // Live chats scoping
+  const scopedChats = useMemo(() => {
+    if (isSuperAdmin) return chats;
+    return chats.filter(c => adminUserService.isUserAssigned(activeAdmin, c.userId, c.userEmail));
+  }, [chats, activeAdmin, isSuperAdmin]);
+
+  const escalatedChatsCount = useMemo(() => {
+    return scopedChats.filter(c => c.needsHuman || c.status === 'escalated').length;
+  }, [scopedChats]);
+
+  const totalUnreadChatCount = useMemo(() => {
+    return scopedChats.reduce((sum, c) => sum + (c.unread_count || c.unreadCount || 0), 0);
+  }, [scopedChats]);
 
   const platformAssets = calculatePlatformAssets();
   const totalPlatformValue = Object.values(platformAssets).reduce((sum: number, asset: any) => sum + asset.value, 0);
 
   const stats = [
-    { label: 'Total Users', value: users.length, icon: Users, color: 'bg-blue-500' },
-    { label: 'Open Tickets', value: tickets.filter(t => t.status === 'open').length, icon: Headphones, color: 'bg-red-500' },
-    { label: 'Active Chats', value: chats.filter(c => c.status === 'active').length, icon: MessageCircle, color: 'bg-green-500' },
+    { label: isSuperAdmin ? 'Total Users' : 'Assigned Users', value: scopedUsers.length, icon: Users, color: 'bg-blue-500' },
+    { label: 'Open Tickets', value: scopedTickets.filter(t => t.status === 'open').length, icon: Headphones, color: 'bg-red-500' },
+    { label: 'Active Chats', value: scopedChats.filter(c => c.status === 'active').length, icon: MessageCircle, color: 'bg-green-500' },
     { label: 'Platform Value', value: `$${totalPlatformValue.toLocaleString('en-US', { maximumFractionDigits: 0 })}`, icon: DollarSign, color: 'bg-purple-500', isValue: true }
   ];
 
@@ -2149,7 +2310,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                 </span>
               </Button>
 
-              <Badge variant="secondary">{adminProfile.role}</Badge>
+              <Badge 
+                variant="secondary"
+                className={isSuperAdmin 
+                  ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border-none font-medium' 
+                  : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border-none font-medium'}
+              >
+                {adminProfile.role}
+              </Badge>
               
               {/* Admin Profile Dropdown */}
               <DropdownMenu>
@@ -2235,64 +2403,96 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="users">User Management</SelectItem>
-                <SelectItem value="assets">Assets Overview</SelectItem>
-                <SelectItem value="fees">Fee Settings</SelectItem>
-                <SelectItem value="support">
-                  Support Tickets
-                  {tickets.filter(t => t.status === 'open').length > 0 && ` (${tickets.filter(t => t.status === 'open').length})`}
-                </SelectItem>
-                <SelectItem value="messages">
-                  Messages & Mail
-                </SelectItem>
-                <SelectItem value="chat">
-                  Live Chat
-                  {chats.reduce((sum, c) => sum + c.unread_count, 0) > 0 && ` (${chats.reduce((sum, c) => sum + c.unread_count, 0)})`}
-                </SelectItem>
-                <SelectItem value="audit">Audit Logs</SelectItem>
-                <SelectItem value="sync">Data Sync</SelectItem>
+                {canAccessTab('users') && <SelectItem value="users">User Management</SelectItem>}
+                {canAccessTab('assets') && <SelectItem value="assets">Assets Overview</SelectItem>}
+                {canAccessTab('fees') && <SelectItem value="fees">Fee Settings</SelectItem>}
+                {canAccessTab('support') && (
+                  <SelectItem value="support">
+                    Support Tickets
+                    {scopedTickets.filter(t => t.status === 'open').length > 0 && ` (${scopedTickets.filter(t => t.status === 'open').length})`}
+                  </SelectItem>
+                )}
+                {canAccessTab('messages') && (
+                  <SelectItem value="messages">
+                    Messages & Mail
+                  </SelectItem>
+                )}
+                {canAccessTab('chat') && (
+                  <SelectItem value="chat">
+                    Live Chat
+                    {escalatedChatsCount > 0 
+                      ? ` (🚨 ${escalatedChatsCount} Need Agent)` 
+                      : totalUnreadChatCount > 0 ? ` (${totalUnreadChatCount})` : ''}
+                  </SelectItem>
+                )}
+                {isSuperAdmin && (
+                  <SelectItem value="adminUsers">Admin Users</SelectItem>
+                )}
+                {canAccessTab('audit') && <SelectItem value="audit">Audit Logs</SelectItem>}
+                {canAccessTab('sync') && <SelectItem value="sync">Data Sync</SelectItem>}
               </SelectContent>
             </Select>
           </div>
 
           {/* Desktop Tab Buttons */}
           <TabsList className="mb-6 hidden md:flex">
-            <TabsTrigger value="users">User Management</TabsTrigger>
-            <TabsTrigger value="assets">Assets Overview</TabsTrigger>
-            <TabsTrigger value="fees">Fee Settings</TabsTrigger>
-            <TabsTrigger value="support">
-              <div className="flex items-center gap-2">
-                Support Tickets
-                {tickets.filter(t => t.status === 'open').length > 0 && (
-                  <Badge variant="destructive" className="text-xs px-1.5 py-0">
-                    {tickets.filter(t => t.status === 'open').length}
-                  </Badge>
-                )}
-              </div>
-            </TabsTrigger>
-            <TabsTrigger value="messages">
-              <div className="flex items-center gap-2">
-                <Mail className="w-4 h-4" />
-                Messages & Mail
-              </div>
-            </TabsTrigger>
-            <TabsTrigger value="chat">
-              <div className="flex items-center gap-2">
-                Live Chat
-                {chats.reduce((sum, c) => sum + c.unread_count, 0) > 0 && (
-                  <Badge variant="destructive" className="text-xs px-1.5 py-0">
-                    {chats.reduce((sum, c) => sum + c.unread_count, 0)}
-                  </Badge>
-                )}
-              </div>
-            </TabsTrigger>
-            <TabsTrigger value="audit">Audit Logs</TabsTrigger>
-            <TabsTrigger value="sync">
-              <div className="flex items-center gap-2">
-                <Database className="w-4 h-4" />
-                Data Sync
-              </div>
-            </TabsTrigger>
+            {canAccessTab('users') && <TabsTrigger value="users">User Management</TabsTrigger>}
+            {canAccessTab('assets') && <TabsTrigger value="assets">Assets Overview</TabsTrigger>}
+            {canAccessTab('fees') && <TabsTrigger value="fees">Fee Settings</TabsTrigger>}
+            {canAccessTab('support') && (
+              <TabsTrigger value="support">
+                <div className="flex items-center gap-2">
+                  Support Tickets
+                  {scopedTickets.filter(t => t.status === 'open').length > 0 && (
+                    <Badge variant="destructive" className="text-xs px-1.5 py-0">
+                      {scopedTickets.filter(t => t.status === 'open').length}
+                    </Badge>
+                  )}
+                </div>
+              </TabsTrigger>
+            )}
+            {canAccessTab('messages') && (
+              <TabsTrigger value="messages">
+                <div className="flex items-center gap-2">
+                  <Mail className="w-4 h-4" />
+                  Messages & Mail
+                </div>
+              </TabsTrigger>
+            )}
+            {canAccessTab('chat') && (
+              <TabsTrigger value="chat">
+                <div className="flex items-center gap-2">
+                  <MessageCircle className="w-4 h-4" />
+                  <span>Live Chat</span>
+                  {escalatedChatsCount > 0 ? (
+                    <Badge variant="destructive" className="text-[11px] px-1.5 py-0 animate-pulse bg-red-600 hover:bg-red-700">
+                      🚨 {escalatedChatsCount} Need Agent
+                    </Badge>
+                  ) : totalUnreadChatCount > 0 ? (
+                    <Badge variant="destructive" className="text-xs px-1.5 py-0">
+                      {totalUnreadChatCount}
+                    </Badge>
+                  ) : null}
+                </div>
+              </TabsTrigger>
+            )}
+            {isSuperAdmin && (
+              <TabsTrigger value="adminUsers">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  Admin Users
+                </div>
+              </TabsTrigger>
+            )}
+            {canAccessTab('audit') && <TabsTrigger value="audit">Audit Logs</TabsTrigger>}
+            {canAccessTab('sync') && (
+              <TabsTrigger value="sync">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4" />
+                  Data Sync
+                </div>
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* Users Tab */}
@@ -2829,13 +3029,23 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
                       {/* Gas Fees */}
                       <div className="mb-6 border-t border-gray-200 dark:border-gray-600 pt-6">
-                        <div className="flex items-center justify-between mb-3">
-                          <h4 className="text-sm text-gray-700 dark:text-gray-300">Estimated Gas Fees</h4>
+                        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Estimated Gas Fees</h4>
+                            <span className="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                              Token: {fee.gas_fee_token || 'ETH'}
+                            </span>
+                            {selectedFeeUserId !== 'global' && (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-mono bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                User Bal: {users.find(u => u.id === selectedFeeUserId)?.balances?.[fee.gas_fee_token || 'ETH'] || '0'} {fee.gas_fee_token || 'ETH'}
+                              </span>
+                            )}
+                          </div>
                           <Badge variant={fee.gas_fee_enabled ? 'default' : 'secondary'}>
                             {fee.gas_fee_enabled ? 'Enabled' : 'Disabled'}
                           </Badge>
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           <div>
                             <label className="block text-xs text-gray-600 dark:text-gray-400 mb-2">
                               Fee Type
@@ -2847,7 +3057,20 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                               {fee.gas_fee_type === 'fixed' ? 'Fixed Amount' : 'Percentage Rate'}
                             </label>
                             <Input 
-                              value={fee.gas_fee_type === 'fixed' ? fee.gas_fee_fixed : `${fee.gas_fee_percent}%`} 
+                              value={fee.gas_fee_type === 'fixed' ? `${fee.gas_fee_fixed} ${fee.gas_fee_token || 'ETH'}` : `${fee.gas_fee_percent}%`} 
+                              readOnly 
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-2">
+                              Gas Fee Token {selectedFeeUserId !== 'global' ? '(User Balance)' : ''}
+                            </label>
+                            <Input 
+                              value={
+                                selectedFeeUserId !== 'global'
+                                  ? `${fee.gas_fee_token || 'ETH'} • Bal: ${users.find(u => u.id === selectedFeeUserId)?.balances?.[fee.gas_fee_token || 'ETH'] || '0'}`
+                                  : `${fee.gas_fee_token || 'ETH'}`
+                              } 
                               readOnly 
                             />
                           </div>
@@ -3078,7 +3301,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {tickets
+                  {scopedTickets
                     .filter(ticket => {
                       if (ticketStatusFilter === 'all') return true;
                       if (ticketStatusFilter === 'in-progress') {
@@ -3152,7 +3375,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
               </Table>
 
               {/* Empty State */}
-              {tickets.filter(ticket => {
+              {scopedTickets.filter(ticket => {
                 if (ticketStatusFilter === 'all') return true;
                 if (ticketStatusFilter === 'in-progress') {
                   return ticket.status === 'in-progress' || ticket.status === 'in_progress';
@@ -3176,150 +3399,20 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
 
           {/* Messages & Mail Tab */}
           <TabsContent value="messages">
-            <AdminMessagesTab users={users} />
+            <AdminMessagesTab users={scopedUsers} />
           </TabsContent>
 
           {/* Live Chat Tab */}
           <TabsContent value="chat">
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm">
-              <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h2 className="text-xl text-gray-900 dark:text-white">Live Chat</h2>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Chat with users in real-time (Messages synced with WhatsApp)
-                    </p>
-                  </div>
-                </div>
-
-                {/* Filter Badges */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm text-gray-600 dark:text-gray-400">Filter:</span>
-                  <button
-                    onClick={() => setChatStatusFilter('all')}
-                    className={`transition-all ${
-                      chatStatusFilter === 'all'
-                        ? 'ring-2 ring-purple-500 ring-offset-2 dark:ring-offset-gray-800'
-                        : ''
-                    }`}
-                  >
-                    <Badge 
-                      variant="outline" 
-                      className={`cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 ${
-                        chatStatusFilter === 'all' ? 'bg-gray-100 dark:bg-gray-700' : ''
-                      }`}
-                    >
-                      All ({chats.length})
-                    </Badge>
-                  </button>
-                  <button
-                    onClick={() => setChatStatusFilter('active')}
-                    className={`transition-all ${
-                      chatStatusFilter === 'active'
-                        ? 'ring-2 ring-purple-500 ring-offset-2 dark:ring-offset-gray-800'
-                        : ''
-                    }`}
-                  >
-                    <Badge 
-                      variant="default" 
-                      className={`cursor-pointer hover:opacity-80 ${
-                        chatStatusFilter === 'active' ? 'ring-2 ring-white' : ''
-                      }`}
-                    >
-                      Active ({chats.filter(c => c.status === 'active').length})
-                    </Badge>
-                  </button>
-                  <button
-                    onClick={() => setChatStatusFilter('resolved')}
-                    className={`transition-all ${
-                      chatStatusFilter === 'resolved'
-                        ? 'ring-2 ring-purple-500 ring-offset-2 dark:ring-offset-gray-800'
-                        : ''
-                    }`}
-                  >
-                    <Badge 
-                      variant="secondary" 
-                      className={`cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 ${
-                        chatStatusFilter === 'resolved' ? 'bg-gray-200 dark:bg-gray-600' : ''
-                      }`}
-                    >
-                      Resolved ({chats.filter(c => c.status === 'resolved').length})
-                    </Badge>
-                  </button>
-                </div>
-              </div>
-
-              <div className="divide-y divide-gray-200 dark:divide-gray-700">
-                {chats
-                  .filter(chat => {
-                    if (chatStatusFilter === 'all') return true;
-                    return chat.status === chatStatusFilter;
-                  })
-                  .map((chat) => (
-                  <div 
-                    key={chat.id}
-                    className="p-6 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
-                    onClick={() => handleViewChat(chat)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-4 flex-1">
-                        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-lg">
-                          {(chat.userName || chat.user_name || 'U').split(' ').map((n: string) => n[0]).join('').toUpperCase()}
-                        </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="text-gray-900 dark:text-white">{chat.userName || chat.user_name || 'Unknown User'}</h3>
-                            <Badge variant="outline" className="text-xs">
-                              <Phone className="w-3 h-3 mr-1" />
-                              WhatsApp
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">{chat.userEmail || chat.user_email || 'No email'}</p>
-                          {chat.messages && chat.messages.length > 0 && (
-                            <p className="text-sm text-gray-800 dark:text-gray-300 mt-1 truncate max-w-md">
-                              {chat.messages[chat.messages.length - 1].message}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                          {new Date(chat.updated || chat.updated_at).toLocaleTimeString()}
-                        </p>
-                        <Badge 
-                          variant={chat.status === 'active' ? 'default' : 'secondary'}
-                          className="capitalize"
-                        >
-                          {chat.status}
-                        </Badge>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                          {chat.messages ? chat.messages.length : 0} messages
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Empty State */}
-              {chats.filter(chat => {
-                if (chatStatusFilter === 'all') return true;
-                return chat.status === chatStatusFilter;
-              }).length === 0 && (
-                <div className="p-12 text-center">
-                  <MessageCircle className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                  <h3 className="text-lg text-gray-900 dark:text-white mb-2">
-                    No {chatStatusFilter !== 'all' ? chatStatusFilter : ''} chats found
-                  </h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    {chatStatusFilter !== 'all' 
-                      ? `There are no ${chatStatusFilter} chat conversations`
-                      : 'No live chat conversations yet. Users can start a chat from their Support Center.'}
-                  </p>
-                </div>
-              )}
-            </div>
+            <AdminLiveChatView users={scopedUsers} currentAdmin={activeAdmin} />
           </TabsContent>
+
+          {/* Admin Users Tab (Super Admin Only) */}
+          {isSuperAdmin && (
+            <TabsContent value="adminUsers">
+              <AdminUsersTab users={users} currentAdmin={activeAdmin} />
+            </TabsContent>
+          )}
 
           {/* Audit Logs Tab */}
           <TabsContent value="audit">
@@ -4044,62 +4137,221 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       )}
 
       {/* User Activities Modal */}
-      {showUserActivities && selectedUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setShowUserActivities(false)}>
-          <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-3xl w-full p-6 my-8" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl text-gray-900 dark:text-white">User Activities</h2>
-              <button onClick={() => setShowUserActivities(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">
-                <span className="text-gray-500 text-xl">×</span>
-              </button>
-            </div>
+      {showUserActivities && selectedUser && (() => {
+        const rawActivities = getUserActivities(selectedUser.id);
+        const availableAssets = Array.from(new Set(rawActivities.map((a: any) => a.asset).filter(Boolean)));
 
-            <div className="space-y-4">
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">User</p>
-                <p className="text-gray-900 dark:text-white">{selectedUser.email}</p>
+        const filteredModalActivities = rawActivities.filter((activity: any) => {
+          // 1. Asset filter
+          if (activityAssetFilter !== 'ALL') {
+            const aSym = (activity.asset || '').toUpperCase();
+            const fSym = activityAssetFilter.toUpperCase();
+            if (aSym !== fSym && !aSym.startsWith(fSym) && !fSym.startsWith(aSym)) {
+              return false;
+            }
+          }
+
+          // 2. Date filter
+          if (activityDateFilter) {
+            try {
+              const actDate = new Date(activity.timestamp).toISOString().split('T')[0];
+              if (actDate !== activityDateFilter) {
+                return false;
+              }
+            } catch {
+              return false;
+            }
+          } else if (activityDatePreset !== 'all') {
+            const actTime = new Date(activity.timestamp).getTime();
+            const now = Date.now();
+            if (activityDatePreset === 'today') {
+              const startOfToday = new Date();
+              startOfToday.setHours(0, 0, 0, 0);
+              if (actTime < startOfToday.getTime()) return false;
+            } else if (activityDatePreset === '7d') {
+              if (now - actTime > 7 * 24 * 60 * 60 * 1000) return false;
+            } else if (activityDatePreset === '30d') {
+              if (now - actTime > 30 * 24 * 60 * 60 * 1000) return false;
+            }
+          }
+
+          return true;
+        });
+
+        const isFiltered = activityAssetFilter !== 'ALL' || activityDateFilter !== '' || activityDatePreset !== 'all';
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto" onClick={() => setShowUserActivities(false)}>
+            <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-3xl w-full p-6 my-8 shadow-2xl border border-gray-100 dark:border-gray-700" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-center justify-between pb-4 border-b border-gray-100 dark:border-gray-700">
+                <div>
+                  <h2 className="text-2xl font-bold text-gray-900 dark:text-white">User Transactions</h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{selectedUser.email}</p>
+                </div>
+                <button onClick={() => setShowUserActivities(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+                  <span className="text-2xl leading-none">&times;</span>
+                </button>
               </div>
 
-              <div className="space-y-3">
-                {getUserActivities(selectedUser.id).length === 0 ? (
-                  <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                    No activities yet
+              {/* Filter Controls Toolbar */}
+              <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl border border-gray-200/70 dark:border-gray-600/60 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Asset Filter Dropdown */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">Asset:</span>
+                      <select
+                        value={activityAssetFilter}
+                        onChange={(e) => setActivityAssetFilter(e.target.value)}
+                        className="text-xs font-medium bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg px-2.5 py-1.5 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm"
+                      >
+                        <option value="ALL">All Assets ({rawActivities.length})</option>
+                        {availableAssets.map((sym: any) => {
+                          const count = rawActivities.filter((a: any) => a.asset === sym).length;
+                          return (
+                            <option key={sym} value={sym}>
+                              {sym} ({count})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    {/* Specific Date Picker */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">Date:</span>
+                      <input
+                        type="date"
+                        value={activityDateFilter}
+                        onChange={(e) => {
+                          setActivityDateFilter(e.target.value);
+                          setActivityDatePreset('all');
+                        }}
+                        className="text-xs bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg px-2.5 py-1.5 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Date Preset Pills */}
+                  <div className="flex items-center gap-1">
+                    {(['all', 'today', '7d', '30d'] as const).map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setActivityDatePreset(preset);
+                          setActivityDateFilter('');
+                        }}
+                        className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all ${
+                          activityDatePreset === preset && !activityDateFilter
+                            ? 'bg-purple-600 text-white shadow-sm'
+                            : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        {preset === 'all' ? 'All Time' : preset === 'today' ? 'Today' : preset === '7d' ? 'Last 7D' : 'Last 30D'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Filter Status & Reset Action */}
+                <div className="flex items-center justify-between pt-2 border-t border-gray-200/50 dark:border-gray-600/50 text-xs">
+                  <span className="text-gray-500 dark:text-gray-400">
+                    Showing <strong className="text-gray-900 dark:text-white">{filteredModalActivities.length}</strong> of {rawActivities.length} asset transactions
+                  </span>
+                  {isFiltered && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivityAssetFilter('ALL');
+                        setActivityDateFilter('');
+                        setActivityDatePreset('all');
+                      }}
+                      className="text-purple-600 dark:text-purple-400 hover:underline font-semibold"
+                    >
+                      Reset Filters
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Transactions List */}
+              <div className="mt-4 space-y-3 max-h-[55vh] overflow-y-auto pr-1">
+                {filteredModalActivities.length === 0 ? (
+                  <div className="text-center py-12 bg-gray-50 dark:bg-gray-700/30 rounded-xl border border-dashed border-gray-200 dark:border-gray-700">
+                    <p className="text-gray-500 dark:text-gray-400 font-medium">
+                      {isFiltered ? 'No transactions match the selected filter criteria' : 'No transactions found for this user'}
+                    </p>
+                    {isFiltered && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setActivityAssetFilter('ALL');
+                          setActivityDateFilter('');
+                          setActivityDatePreset('all');
+                        }}
+                        className="mt-3 text-xs"
+                      >
+                        Clear Filters
+                      </Button>
+                    )}
                   </div>
                 ) : (
-                  getUserActivities(selectedUser.id).map((activity) => {
+                  filteredModalActivities.map((activity) => {
                     const asset = assetConfig.find(a => a.symbol === activity.asset);
                     const isPending = activity.status === 'pending' || activity.status === 'processing';
+                    const isDebit = activity.type === 'send' || activity.type === 'admin_debit' || activity.type === 'debit' || activity.type === 'gas_fee';
                     
+                    let Icon = RefreshCw;
+                    if (activity.type === 'send' || activity.type === 'admin_debit' || activity.type === 'debit') Icon = ArrowUpRight;
+                    else if (activity.type === 'receive' || activity.type === 'deposit' || activity.type === 'admin_credit' || activity.type === 'credit') Icon = ArrowDownLeft;
+                    else if (activity.type === 'swap') Icon = RefreshCw;
+                    else if (activity.type === 'buy') Icon = DollarSign;
+                    else if (activity.type === 'gas_fee') Icon = ArrowUpRight;
+
+                    const getCleanLabel = (type: string) => {
+                      const clean = (type || '').replace(/^admin_/, '');
+                      if (clean === 'credit') return 'Credit';
+                      if (clean === 'debit') return 'Debit';
+                      if (clean === 'gas_fee') return 'Gas Fee';
+                      return clean.charAt(0).toUpperCase() + clean.slice(1);
+                    };
+
+                    const displayHash = (activity.hash || '').length > 28
+                      ? `${activity.hash.substring(0, 16)}...${activity.hash.substring(activity.hash.length - 8)}`
+                      : (activity.hash || activity.id);
+
                     return (
-                      <div key={activity.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl border-2 border-transparent hover:border-purple-500 transition-all">
+                      <div key={activity.id} className="p-4 bg-gray-50 dark:bg-gray-700/80 rounded-xl border border-gray-200/60 dark:border-gray-600/60 hover:border-purple-500 dark:hover:border-purple-500 transition-all shadow-sm">
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-3">
-                            <div className={`w-12 h-12 rounded-full ${asset?.color} flex items-center justify-center text-white relative`}>
-                              {activity.type === 'send' && <ArrowUpRight className="w-6 h-6" />}
-                              {activity.type === 'receive' && <ArrowDownLeft className="w-6 h-6" />}
-                              {activity.type === 'swap' && <RefreshCw className="w-6 h-6" />}
-                              {activity.type === 'buy' && <DollarSign className="w-6 h-6" />}
-                              {activity.type === 'deposit' && <ArrowDownLeft className="w-6 h-6" />}
+                            <div className={`w-11 h-11 rounded-full ${asset?.color || 'bg-purple-600'} flex items-center justify-center text-white relative shadow-sm`}>
+                              <Icon className="w-5 h-5" />
                               {isPending && (
                                 <div className="absolute inset-0 rounded-full border-2 border-white border-t-transparent animate-spin" />
                               )}
                             </div>
                             <div>
-                              <p className="text-gray-900 dark:text-white capitalize">{activity.type} {activity.asset}</p>
-                              <p className="text-sm text-gray-600 dark:text-gray-400">
+                              <p className="text-gray-900 dark:text-white font-semibold flex items-center gap-1.5">
+                                <span>{getCleanLabel(activity.type)}</span>
+                                <span className="font-mono text-purple-600 dark:text-purple-400">{activity.asset}</span>
+                              </p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                                 {new Date(activity.timestamp).toLocaleString()}
                               </p>
                             </div>
                           </div>
                           <div className="text-right">
-                            <p className={`text-gray-900 dark:text-white ${activity.type === 'send' ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                              {activity.type === 'send' ? '-' : '+'}{activity.amount} {activity.asset}
+                            <p className={`font-semibold ${isDebit ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                              {isDebit ? '-' : '+'}{activity.amount} {activity.asset}
                             </p>
                             <div className="flex items-center gap-2 justify-end mt-1">
                               <Badge className={getStatusColor(activity.status)}>
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1 text-[11px]">
                                   {isPending && (
-                                    <div className="w-2 h-2 rounded-full bg-current animate-pulse" />
+                                    <div className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
                                   )}
                                   {activity.status}
                                 </div>
@@ -4107,17 +4359,17 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
                             </div>
                           </div>
                         </div>
-                        <div className="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-600">
+                        <div className="flex items-center justify-between pt-2.5 border-t border-gray-200/70 dark:border-gray-600/70">
                           <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate flex-1 mr-2">
-                            {activity.hash.substring(0, 20)}...{activity.hash.substring(activity.hash.length - 8)}
+                            {displayHash}
                           </p>
                           <Button 
                             size="sm" 
                             variant="outline"
                             onClick={() => handleViewTransaction(activity)}
-                            className="shrink-0"
+                            className="shrink-0 h-8 text-xs font-medium"
                           >
-                            <Eye className="w-4 h-4 mr-1" />
+                            <Eye className="w-3.5 h-3.5 mr-1" />
                             View Receipt
                           </Button>
                         </div>
@@ -4128,8 +4380,8 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Ticket Details Modal */}
       {showTicketDetails && selectedTicket && (
@@ -5864,12 +6116,63 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
             assetIcon={assetInfo?.icon || '?'}
             assetColor={assetInfo?.color || 'bg-gray-500'}
             feeData={editingFee.data}
-            targetUser={targetUserObj ? { id: targetUserObj.id, fullName: targetUserObj.fullName, email: targetUserObj.email } : null}
+            targetUser={targetUserObj ? { 
+              id: targetUserObj.id, 
+              fullName: targetUserObj.fullName, 
+              email: targetUserObj.email,
+              balances: targetUserObj.balances 
+            } : null}
             onSave={(updatedFee) => handleSaveFee(editingFee.asset, updatedFee)}
             onClose={() => setEditingFee(null)}
           />
         );
       })()}
+      {/* Floating Live Chat & AI Support Quick Launch Pill */}
+      {canAccessTab('chat') && (
+        <div className="fixed bottom-6 right-6 z-40">
+          <button
+            onClick={() => {
+              setActiveTab('chat');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`group flex items-center gap-3 px-4 py-3 rounded-full shadow-2xl transition-all duration-300 transform hover:scale-105 ${
+              escalatedChatsCount > 0
+                ? 'bg-gradient-to-r from-red-600 via-rose-600 to-pink-600 text-white ring-4 ring-red-400/50 shadow-red-500/40 animate-pulse'
+                : activeTab === 'chat'
+                ? 'bg-purple-600 text-white shadow-purple-500/30 ring-2 ring-purple-400/40'
+                : 'bg-gray-900/95 dark:bg-gray-800/95 backdrop-blur-md text-white hover:bg-gray-800 dark:hover:bg-gray-700 shadow-xl ring-1 ring-white/10'
+            }`}
+            title="Open Live Chat & AI Support Console"
+          >
+            <div className="relative">
+              <MessageCircle className="w-5 h-5" />
+              {escalatedChatsCount > 0 ? (
+                <span className="absolute -top-2 -right-2 bg-yellow-400 text-black font-black text-[10px] w-4 h-4 rounded-full flex items-center justify-center border-2 border-red-600 shadow">
+                  !
+                </span>
+              ) : totalUnreadChatCount > 0 ? (
+                <span className="absolute -top-2 -right-2 bg-red-500 text-white font-bold text-[10px] w-4 h-4 rounded-full flex items-center justify-center border-2 border-white dark:border-gray-900 shadow">
+                  {totalUnreadChatCount}
+                </span>
+              ) : null}
+            </div>
+
+            <div className="flex flex-col text-left">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-semibold">Live Support</span>
+                {escalatedChatsCount > 0 && (
+                  <span className="text-[10px] font-bold bg-white/20 text-white px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                    {escalatedChatsCount} Needs Human
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] text-gray-300 dark:text-gray-400">
+                {escalatedChatsCount > 0 ? 'User waiting for agent response' : 'WhatsApp & Bot Console'}
+              </span>
+            </div>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

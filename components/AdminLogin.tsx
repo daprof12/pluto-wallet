@@ -5,6 +5,7 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import Logo from './Logo';
 import { storage } from '../utils/platform';
+import { adminUserService } from '../utils/adminUserService';
 
 interface AdminLoginProps {
   onLogin: () => void;
@@ -19,32 +20,34 @@ export default function AdminLogin({ onLogin, onBack, onLogoClick }: AdminLoginP
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Mock admin credentials - in production, this would be handled by backend
-  const ADMIN_CREDENTIALS = {
-    email: 'admin@pluto.io',
-    password: 'Admin@123'
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
-    // Simulate API call
-    setTimeout(async () => {
-      if (email === ADMIN_CREDENTIALS.email && password === ADMIN_CREDENTIALS.password) {
-        // Store admin session
+    try {
+      const res = await adminUserService.authenticateAdmin(email, password);
+      if (res.success && res.admin) {
+        // Store admin session in storage and local session
         await storage.set('pluto_admin_session', {
-          email: email,
+          id: res.admin.id,
+          email: res.admin.email,
+          role: res.admin.role,
+          permissions: res.admin.permissions,
+          assigned_user_ids: res.admin.assigned_user_ids,
+          status: res.admin.status,
           loginTime: new Date().toISOString(),
           sessionId: 'sess_' + Math.random().toString(36).substring(7)
         });
         onLogin();
       } else {
-        setError('Invalid email or password');
+        setError(res.error || 'Invalid email or password');
         setLoading(false);
       }
-    }, 1000);
+    } catch (err: any) {
+      setError(err?.message || 'Login failed. Please try again.');
+      setLoading(false);
+    }
   };
 
   return (

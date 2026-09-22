@@ -1,4 +1,5 @@
 import dataService from '../utils/dataService';
+import transactionService from '../utils/transactionService';
 import { useState, useEffect } from 'react';
 import { 
   Home, 
@@ -29,6 +30,7 @@ import BuyModal from './wallet/BuyModal';
 import SettingsModal from './wallet/SettingsModal';
 import NotificationModal from './wallet/NotificationModal';
 import SupportModal from './wallet/SupportModal';
+import UserFloatingChat from './wallet/UserFloatingChat';
 import QRScannerModal from './wallet/QRScannerModal';
 import AssetOverview from './wallet/AssetOverview';
 import TransactionReceiptModal from './wallet/TransactionReceiptModal';
@@ -62,6 +64,52 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [gasFeeDepositInfo, setGasFeeDepositInfo] = useState<{asset: string; amount: string} | null>(null);
 
+  const currentUserId = walletData?.id || walletData?.userId;
+  const [userTransactions, setUserTransactions] = useState<any[]>(() => walletData?.transactions || []);
+
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    let isSubscribed = true;
+
+    const loadRemoteTransactions = async () => {
+      try {
+        const txs = await transactionService.fetchUserTransactions(currentUserId);
+        if (isSubscribed && Array.isArray(txs)) {
+          setUserTransactions(txs);
+        }
+      } catch (err) {
+        console.warn('[WalletDashboard] Failed loading transactions:', err);
+      }
+    };
+
+    loadRemoteTransactions();
+
+    const handleTxUpdate = (e: any) => {
+      if (!e.detail || !e.detail.userId || e.detail.userId === currentUserId) {
+        loadRemoteTransactions();
+      }
+    };
+
+    const handleWalletUpdated = (e: any) => {
+      const w = e.detail?.walletData || e.detail?.wallet;
+      if (w && (w.id === currentUserId || w.userId === currentUserId)) {
+        if (Array.isArray(w.transactions)) {
+          setUserTransactions(w.transactions);
+        }
+      }
+    };
+
+    window.addEventListener('pluto_transactions_updated', handleTxUpdate);
+    window.addEventListener('walletDataUpdated', handleWalletUpdated);
+
+    return () => {
+      isSubscribed = false;
+      window.removeEventListener('pluto_transactions_updated', handleTxUpdate);
+      window.removeEventListener('walletDataUpdated', handleWalletUpdated);
+    };
+  }, [currentUserId]);
+
   // Get notification count from localStorage (admin-sent notifications)
   const getNotificationCount = () => {
     try {
@@ -83,9 +131,6 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
     window.addEventListener('notificationsUpdated', handleNotificationUpdate);
     return () => window.removeEventListener('notificationsUpdated', handleNotificationUpdate);
   }, [walletData.id]);
-  
-  // Mock support count (pending tickets)
-  const supportCount = 1;
 
   const [assets, setAssets] = useState<AssetConfig[]>(loadAssetConfig());
   
@@ -120,26 +165,93 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
     60000 // Update every 60 seconds
   );
 
+  const [assetFilterMode, setAssetFilterMode] = useState<'highest' | 'with_balance' | 'all'>('highest');
+
+  const getAssetBalanceInfo = (symbol: string) => {
+    const rawStr = (walletData?.balances?.[symbol] ?? '0').toString().trim();
+    const bal = parseFloat(rawStr);
+    const validBal = isNaN(bal) || bal < 0 ? 0 : bal;
+    let price = prices[symbol as keyof typeof prices];
+    if (price === undefined || isNaN(price) || price === 0) {
+      if (symbol.startsWith('USDT') || symbol.startsWith('USDC')) {
+        price = 1.0;
+      } else {
+        price = 0;
+      }
+    }
+    const usdVal = validBal * price;
+    return { bal: validBal, usdVal: isNaN(usdVal) ? 0 : usdVal };
+  };
+
   // Filter assets to show on home page:
   // 1. Admin enabled (asset.enabled !== false)
   // 2. User enabled (walletData.assetDisplaySettings?.[asset.symbol] !== false)
-  const visibleAssets = assets.filter((asset) => {
+  // 3. Filtered and sorted based on highest balance by default
+  const baseVisibleAssets = assets.filter((asset) => {
     const adminEnabled = asset.enabled !== false;
     const userEnabled = walletData.assetDisplaySettings?.[asset.symbol] !== false;
     return adminEnabled && userEnabled;
   });
 
+  const visibleAssets = [...baseVisibleAssets]
+    .filter((asset) => {
+      if (assetFilterMode === 'with_balance') {
+        const { bal } = getAssetBalanceInfo(asset.symbol);
+        return bal > 0;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      if (assetFilterMode === 'highest' || assetFilterMode === 'with_balance') {
+        const infoA = getAssetBalanceInfo(a.symbol);
+        const infoB = getAssetBalanceInfo(b.symbol);
+        // Primary sort: highest USD value first
+        if (Math.abs(infoB.usdVal - infoA.usdVal) > 0.000001) {
+          return infoB.usdVal - infoA.usdVal;
+        }
+        // Secondary sort: highest numerical balance
+        if (Math.abs(infoB.bal - infoA.bal) > 0.000001) {
+          return infoB.bal - infoA.bal;
+        }
+      }
+      return 0;
+    });
+
   const calculateTotal = () => {
+    if (!walletData?.balances || typeof walletData.balances !== 'object') return 0;
     let total = 0;
     Object.entries(walletData.balances || {}).forEach(([asset, balance]) => {
-      const price = prices[asset as keyof typeof prices] || (asset.includes('USDT') ? 1.00 : 0);
-      total += parseFloat(balance as string || '0') * price;
+      const rawStr = (balance !== null && balance !== undefined ? balance : '0').toString().trim();
+      const val = parseFloat(rawStr);
+      if (isNaN(val) || val <= 0) return;
+
+      let price = prices[asset as keyof typeof prices];
+      if (price === undefined || isNaN(price) || price === 0) {
+        if (asset.startsWith('USDT') || asset.startsWith('USDC')) {
+          price = 1.0;
+        } else {
+          price = 0;
+        }
+      }
+      const itemVal = val * price;
+      if (!isNaN(itemVal) && isFinite(itemVal)) {
+        total += itemVal;
+      }
     });
-    return total;
+    return isNaN(total) || !isFinite(total) ? 0 : total;
   };
 
-  // Get transactions from wallet data (sorted by timestamp, newest first)
-  const transactions = (walletData.transactions || []).sort((a: any, b: any) => {
+  // Filter out any non-asset activity (e.g. kyc_review, login, non-asset events)
+  const isAssetTx = (tx: any) => {
+    if (!tx || typeof tx !== 'object') return false;
+    const type = (tx.type || '').toLowerCase();
+    if (type === 'kyc_review' || type === 'kyc' || type === 'security' || type === 'login') return false;
+    return true;
+  };
+
+  // Get transactions from state or wallet data (sorted by timestamp, newest first)
+  const rawTxList = (userTransactions.length > 0 ? userTransactions : (walletData.transactions || [])).filter(isAssetTx);
+  const transactions = [...rawTxList].sort((a: any, b: any) => {
     return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
   });
 
@@ -204,7 +316,7 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
         asset={selectedAsset}
         onBack={handleAssetOverviewBack}
         isDark={walletData.theme === 'dark'}
-        walletData={walletData}
+        walletData={{ ...walletData, transactions }}
         onUpdateWallet={onUpdateWallet}
         isAdmin={false}
         onNavigateToSend={(assetSymbol) => {
@@ -354,6 +466,10 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                 setIsRefreshing(true);
                 try {
                   await dataService.initCloudSync();
+                  if (currentUserId) {
+                    const freshTxs = await transactionService.fetchUserTransactions(currentUserId);
+                    if (Array.isArray(freshTxs)) setUserTransactions(freshTxs);
+                  }
                   const storedWallet = dataService.getItem('pluto_wallet');
                   if (storedWallet) {
                     window.dispatchEvent(new CustomEvent('walletDataUpdated', {
@@ -424,8 +540,53 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
           {/* Assets Tab */}
           <TabsContent value="assets">
             <div className="bg-white dark:bg-gray-800 rounded-2xl overflow-hidden shadow-sm">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                <h3 className="text-lg text-gray-900 dark:text-white">Your Assets</h3>
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg text-gray-900 dark:text-white">Your Assets</h3>
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-purple-50 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                    {visibleAssets.length}
+                  </span>
+                </div>
+
+                {/* Filter and Sort based on highest balance */}
+                <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700/60 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setAssetFilterMode('highest')}
+                    className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all ${
+                      assetFilterMode === 'highest'
+                        ? 'bg-white dark:bg-gray-800 text-purple-600 dark:text-purple-400 shadow-sm font-semibold'
+                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                    }`}
+                    title="Sort assets by highest balance first"
+                  >
+                    Highest Balance
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAssetFilterMode('with_balance')}
+                    className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all ${
+                      assetFilterMode === 'with_balance'
+                        ? 'bg-white dark:bg-gray-800 text-purple-600 dark:text-purple-400 shadow-sm font-semibold'
+                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                    }`}
+                    title="Show only assets with balance"
+                  >
+                    With Balance
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAssetFilterMode('all')}
+                    className={`px-2.5 py-1 text-xs rounded-lg font-medium transition-all ${
+                      assetFilterMode === 'all'
+                        ? 'bg-white dark:bg-gray-800 text-purple-600 dark:text-purple-400 shadow-sm font-semibold'
+                        : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                    }`}
+                    title="Show all assets"
+                  >
+                    All
+                  </button>
+                </div>
               </div>
               
               <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -547,34 +708,47 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                 {transactions.map((tx) => {
                   const asset = assets.find(a => a.symbol === tx.asset);
                   const isPending = tx.status === 'pending' || tx.status === 'processing';
+                  const isDeduction = tx.type === 'send' || tx.type === 'admin_debit' || tx.type === 'debit' || tx.type === 'gas_fee';
                   
                   let Icon = RefreshCw;
-                  if (tx.type === 'receive') Icon = ArrowDownLeft;
-                  else if (tx.type === 'send') Icon = ArrowUpRight;
+                  if (tx.type === 'receive' || tx.type === 'deposit' || tx.type === 'admin_credit' || tx.type === 'credit') Icon = ArrowDownLeft;
+                  else if (tx.type === 'send' || tx.type === 'admin_debit' || tx.type === 'debit') Icon = ArrowUpRight;
                   else if (tx.type === 'swap') Icon = RefreshCw;
                   else if (tx.type === 'buy') Icon = DollarSign;
-                  else if (tx.type === 'deposit') Icon = ArrowDownLeft;
+                  else if (tx.type === 'gas_fee') Icon = ArrowUpRight;
+
+                  const getCleanLabel = (type: string) => {
+                    const clean = (type || '').replace(/^admin_/, '');
+                    if (clean === 'credit') return 'Credit';
+                    if (clean === 'debit') return 'Debit';
+                    if (clean === 'gas_fee') return 'Gas Fee';
+                    return clean.charAt(0).toUpperCase() + clean.slice(1);
+                  };
+
+                  const displayHash = (tx.hash || '').length > 28
+                    ? `${tx.hash.substring(0, 16)}...${tx.hash.substring(tx.hash.length - 8)}`
+                    : (tx.hash || tx.id);
 
                   return (
                     <div key={tx.id} className="p-4 bg-gray-50 dark:bg-gray-700 rounded-xl border-2 border-transparent hover:border-purple-500 transition-all">
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
-                          <div className={`w-12 h-12 rounded-full ${asset?.color} flex items-center justify-center text-white relative`}>
+                          <div className={`w-12 h-12 rounded-full ${asset?.color || 'bg-purple-600'} flex items-center justify-center text-white relative`}>
                             <Icon className="w-6 h-6" />
                             {isPending && (
                               <div className="absolute inset-0 rounded-full border-2 border-white border-t-transparent animate-spin" />
                             )}
                           </div>
                           <div>
-                            <p className="text-gray-900 dark:text-white capitalize">{tx.type} {tx.asset}</p>
+                            <p className="text-gray-900 dark:text-white font-medium">{getCleanLabel(tx.type)} {tx.asset}</p>
                             <p className="text-sm text-gray-600 dark:text-gray-400">
                               {new Date(tx.timestamp).toLocaleString()}
                             </p>
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className={`text-gray-900 dark:text-white ${tx.type === 'send' ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                            {tx.type === 'send' ? '-' : '+'}{tx.amount} {tx.asset}
+                          <p className={`font-semibold ${isDeduction ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                            {isDeduction ? '-' : '+'}{tx.amount} {tx.asset}
                           </p>
                           <div className="flex items-center gap-2 justify-end mt-1">
                             <Badge className={getStatusColor(tx.status)}>
@@ -590,7 +764,7 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
                       </div>
                       <div className="flex items-center justify-between pt-3 border-t border-gray-200 dark:border-gray-600">
                         <p className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate flex-1 mr-2">
-                          {tx.hash.substring(0, 20)}...{tx.hash.substring(tx.hash.length - 8)}
+                          {displayHash}
                         </p>
                         <Button 
                           size="sm" 
@@ -776,11 +950,6 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
             >
               <div className="relative">
                 <HelpCircle className="w-5 h-5" />
-                {supportCount > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 bg-blue-500 text-white text-[10px] rounded-full flex items-center justify-center">
-                    {supportCount}
-                  </span>
-                )}
               </div>
               <span className="text-xs">Support</span>
             </button>
@@ -808,6 +977,9 @@ export default function WalletDashboard({ walletData, onLock, onUpdateWallet, on
           </div>
         </div>
       </div>
+
+      {/* Floating Live Chat Widget */}
+      <UserFloatingChat walletData={walletData} />
     </div>
   );
 }

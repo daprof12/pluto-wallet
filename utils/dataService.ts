@@ -947,6 +947,13 @@ export const dataService = {
             }
         }
 
+        // 5b. Sync Supabase transactions table with local transactions
+        try {
+            import('./transactionService').then(m => {
+                m.default.syncAllLocalTransactionsToCloud().catch(() => {});
+            }).catch(() => {});
+        } catch {}
+
         // 6. Sync pending writes & subscribe Realtime
         await syncPendingWrites();
         setupRealtimeSubscription();

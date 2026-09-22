@@ -5,6 +5,7 @@ import { Input } from './ui/input';
 import Logo from './Logo';
 import { supabase, isSupabaseConfigured } from '../utils/supabaseClient';
 import dataService from '../utils/dataService';
+import transactionService from '../utils/transactionService';
 
 interface UnlockWalletProps {
   walletData?: any;
@@ -158,6 +159,17 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
         userCreatedAt = new Date().toISOString();
       }
 
+      // Fetch transactions directly from Supabase transactions table
+      let userTxns = matchedWallet?.transactions || [];
+      try {
+        const fetched = await transactionService.fetchUserTransactions(matchedUser.id);
+        if (fetched && fetched.length > 0) {
+          userTxns = fetched;
+        }
+      } catch (txErr) {
+        console.warn('[UnlockWallet] Could not fetch transactions from Supabase:', txErr);
+      }
+
       // Reconstruct full active wallet session
       const activeWallet = {
         id: matchedUser.id,
@@ -170,7 +182,7 @@ export default function UnlockWallet({ walletData, onUnlock, onForgot, onCreateN
         password: matchedUser.password || password,
         balances: matchedUser.balances || matchedWallet?.balances || { BTC: '0', ETH: '0', SOL: '0', BNB: '0', USDT: '0' },
         addresses: matchedUser.addresses || matchedWallet?.addresses || {},
-        transactions: matchedWallet?.transactions || [],
+        transactions: userTxns,
         mnemonic_encrypted: matchedWallet?.mnemonic_encrypted || matchedUser.mnemonic_encrypted || '',
         kyc_status: matchedUser.kyc_status || 'pending',
         kyc_data: matchedUser.kyc_data || {},

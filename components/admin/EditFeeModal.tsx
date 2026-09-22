@@ -20,6 +20,7 @@ interface EditFeeModalProps {
     gas_fee_type?: 'fixed' | 'percent';
     gas_fee_fixed?: string;
     gas_fee_percent?: string;
+    gas_fee_token?: string;
   };
   onSave: (updatedFee: any) => void;
   onClose: () => void;
@@ -27,6 +28,7 @@ interface EditFeeModalProps {
     id: string;
     fullName?: string;
     email: string;
+    balances?: Record<string, string>;
   } | null;
 }
 
@@ -60,7 +62,8 @@ export default function EditFeeModal({
     gas_fee_enabled: feeData.gas_fee_enabled ?? true,
     gas_fee_type: (feeData.gas_fee_type || 'fixed') as 'fixed' | 'percent',
     gas_fee_fixed: feeData.gas_fee_fixed || '0',
-    gas_fee_percent: feeData.gas_fee_percent || '0'
+    gas_fee_percent: feeData.gas_fee_percent || '0',
+    gas_fee_token: feeData.gas_fee_token || 'ETH'
   });
 
   const [errors, setErrors] = useState({
@@ -161,7 +164,8 @@ export default function EditFeeModal({
       gas_fee_enabled: formData.gas_fee_enabled,
       gas_fee_type: formData.gas_fee_type,
       gas_fee_fixed: finalGasFixed,
-      gas_fee_percent: finalGasPercent
+      gas_fee_percent: finalGasPercent,
+      gas_fee_token: formData.gas_fee_token || 'ETH'
     });
     
     // Close the modal after saving
@@ -413,6 +417,46 @@ export default function EditFeeModal({
 
             {formData.gas_fee_enabled && (
               <>
+                {/* Gas Fee Token Selection */}
+                <div className="mb-5 p-4 rounded-2xl bg-gray-50 dark:bg-gray-700/60 border border-gray-200 dark:border-gray-600">
+                  <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                    <Label htmlFor="gas_fee_token" className="text-gray-900 dark:text-white font-medium text-sm">
+                      Gas Fee Token
+                    </Label>
+                    {targetUser && (
+                      <span className="text-xs px-2.5 py-1 rounded-full font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
+                        User Balance: {targetUser.balances?.[formData.gas_fee_token] || '0'} {formData.gas_fee_token}
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    id="gas_fee_token"
+                    value={formData.gas_fee_token}
+                    onChange={(e) => setFormData({ ...formData, gas_fee_token: e.target.value })}
+                    className="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm font-medium focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
+                  >
+                    {assetConfig.map((coin) => {
+                      const userBal = targetUser?.balances?.[coin.symbol] || '0';
+                      return (
+                        <option key={coin.symbol} value={coin.symbol}>
+                          {coin.symbol} - {coin.name} {targetUser ? `(Balance: ${userBal} ${coin.symbol})` : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                    {targetUser ? (
+                      <>
+                        Transactions for this user will deduct gas fees in <strong className="text-purple-600 dark:text-purple-400 font-semibold">{formData.gas_fee_token}</strong>. User currently holds <strong className="text-purple-600 dark:text-purple-400 font-mono font-semibold">{targetUser.balances?.[formData.gas_fee_token] || '0'} {formData.gas_fee_token}</strong>.
+                      </>
+                    ) : (
+                      <>
+                        Default gas fee token is Ethereum (ETH). Select an alternative token from the list to set as platform default.
+                      </>
+                    )}
+                  </p>
+                </div>
+
                 {/* Gas Fee Type Selection */}
                 <div className="mb-4">
                   <Label className="text-gray-900 dark:text-white mb-3">Gas Fee Type</Label>
@@ -462,8 +506,8 @@ export default function EditFeeModal({
                         placeholder="0.000000"
                         className={errors.gas_fee_fixed ? 'border-red-500' : ''}
                       />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400">
-                        {asset}
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 font-medium">
+                        {formData.gas_fee_token || 'ETH'}
                       </span>
                     </div>
                     {errors.gas_fee_fixed && (
@@ -523,10 +567,10 @@ export default function EditFeeModal({
                   <div className="text-xs text-green-800 dark:text-green-300 space-y-1">
                     <p>For a 1 {asset} transaction:</p>
                     {formData.gas_fee_type === 'fixed' && (
-                      <p className="font-medium">• Estimated Gas Fee: {formData.gas_fee_fixed || '0'} {asset}</p>
+                      <p className="font-medium">• Estimated Gas Fee: {formData.gas_fee_fixed || '0'} {formData.gas_fee_token || 'ETH'}</p>
                     )}
                     {formData.gas_fee_type === 'percent' && (
-                      <p className="font-medium">• Estimated Gas Fee: {((1 * parseFloat(formData.gas_fee_percent || '0')) / 100).toFixed(6)} {asset} ({formData.gas_fee_percent}%)</p>
+                      <p className="font-medium">• Estimated Gas Fee: {((1 * parseFloat(formData.gas_fee_percent || '0')) / 100).toFixed(6)} {formData.gas_fee_token || 'ETH'} ({formData.gas_fee_percent}%)</p>
                     )}
                   </div>
                 </div>

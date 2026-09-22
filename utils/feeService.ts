@@ -12,6 +12,7 @@ export interface AssetFeeConfig {
   gas_fee_type: 'fixed' | 'percent';
   gas_fee_fixed: string;
   gas_fee_percent: string;
+  gas_fee_token?: string;
 }
 
 export type FeeConfigMap = Record<string, AssetFeeConfig>;
@@ -105,15 +106,16 @@ export function calculateGasFee(
   const symbol = (assetSymbol || '').toUpperCase();
   const chainInfo = getChainGasInfo(symbol);
   const settings = effectiveFees[symbol] || getDefaultFeeForAsset(symbol);
+  const gasAssetToken = (settings?.gas_fee_token || 'ETH').toUpperCase();
 
   if (!settings || !settings.gas_fee_enabled) {
     return {
       enabled: false,
       fee: 0,
-      gasAsset: chainInfo.gasAsset,
+      gasAsset: gasAssetToken,
       blockchain: chainInfo.blockchain,
       type: settings?.gas_fee_type || 'fixed',
-      feeString: `0 ${chainInfo.gasAsset}`
+      feeString: `0 ${gasAssetToken}`
     };
   }
 
@@ -130,10 +132,10 @@ export function calculateGasFee(
   return {
     enabled: true,
     fee,
-    gasAsset: chainInfo.gasAsset,
+    gasAsset: gasAssetToken,
     blockchain: chainInfo.blockchain,
     type: settings.gas_fee_type || 'fixed',
-    feeString: `${fee > 0 ? formatDecimal(fee) : '0'} ${chainInfo.gasAsset}`
+    feeString: `${fee > 0 ? formatDecimal(fee) : '0'} ${gasAssetToken}`
   };
 }
 
@@ -366,7 +368,8 @@ export function getDefaultFeeForAsset(symbol: string, assetName?: string): Asset
       gas_fee_enabled: defaultAssetFeeTemplates[symbol].gas_fee_enabled ?? true,
       gas_fee_type: defaultAssetFeeTemplates[symbol].gas_fee_type || 'fixed',
       gas_fee_fixed: defaultAssetFeeTemplates[symbol].gas_fee_fixed || '0.001',
-      gas_fee_percent: defaultAssetFeeTemplates[symbol].gas_fee_percent || '0.1'
+      gas_fee_percent: defaultAssetFeeTemplates[symbol].gas_fee_percent || '0.1',
+      gas_fee_token: defaultAssetFeeTemplates[symbol].gas_fee_token || 'ETH'
     };
   }
 
@@ -379,7 +382,8 @@ export function getDefaultFeeForAsset(symbol: string, assetName?: string): Asset
     gas_fee_enabled: true,
     gas_fee_type: 'fixed',
     gas_fee_fixed: '0.001',
-    gas_fee_percent: '0.2'
+    gas_fee_percent: '0.2',
+    gas_fee_token: 'ETH'
   };
 }
 
