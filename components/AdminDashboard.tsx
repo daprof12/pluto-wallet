@@ -792,13 +792,37 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
   
   // Update transaction status
   const handleUpdateTransactionStatus = async (userId: string, transactionId: string, newStatus: string) => {
-    await transactionService.updateTransactionStatus(transactionId, newStatus, userId);
     const userTransactions = getUserActivities(userId);
+    const targetTx = userTransactions.find(tx => tx.id === transactionId);
+    const oldStatus = targetTx?.status;
+
+    await transactionService.updateTransactionStatus(transactionId, newStatus, userId);
     const updatedTransactions = userTransactions.map(tx => 
       tx.id === transactionId ? { ...tx, status: newStatus } : tx
     );
     updateUserActivities(userId, updatedTransactions);
     setSelectedTransaction((prev: any) => (prev && prev.id === transactionId ? { ...prev, status: newStatus } : prev));
+
+    // If a pending buy, deposit, or credit is approved/completed by admin, credit the user's balance
+    if (targetTx && oldStatus !== 'completed' && newStatus === 'completed') {
+      const txType = (targetTx.type || '').toLowerCase();
+      if (txType === 'buy' || txType === 'deposit' || txType === 'admin_credit') {
+        const targetUser = users.find(u => u.id === userId);
+        if (targetUser) {
+          const asset = targetTx.asset || targetTx.toAsset || 'USDT';
+          const currentBal = parseFloat(targetUser.balances?.[asset] || '0');
+          const creditAmount = parseFloat(targetTx.toAmount || targetTx.amount || '0');
+          if (!isNaN(creditAmount) && creditAmount > 0) {
+            const newBalances = {
+              ...(targetUser.balances || {}),
+              [asset]: formatDecimal(currentBal + creditAmount)
+            };
+            await dataService.updateUserAndWalletBalances(userId, targetUser.email, newBalances);
+            setUsers(prev => prev.map(u => u.id === userId ? { ...u, balances: newBalances } : u));
+          }
+        }
+      }
+    }
   };
 
   // Calculate total balance in USD safely (prevents $NaN)
@@ -1375,14 +1399,14 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
       // Direct sync to Supabase 'users' and 'wallets' tables
       const updatedUserObj = updatedUsers.find(u => u.id === selectedUser.id);
       if (updatedUserObj) {
-        await dataService.syncUserToSupabase(updatedUserObj);
-        await dataService.syncWalletToSupabase({
+        await dataService.updateUserAndWalletBalances(selectedUser.id, selectedUser.email, editBalances, {
           id: selectedUser.id,
           userId: selectedUser.id,
           email: selectedUser.email,
           balances: editBalances,
           addresses: editAddresses
         });
+        await dataService.syncUserToSupabase(updatedUserObj);
       }
 
       // Direct sync new transactions to Supabase 'transactions' table

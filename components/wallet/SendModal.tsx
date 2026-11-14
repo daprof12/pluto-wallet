@@ -184,7 +184,7 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
           
           // After final stage, update balance and show success
           if (stage === 4) {
-            setTimeout(() => {
+            setTimeout(async () => {
               const customMsg = getActiveCustomMessage();
               if (customMsg && customMsg.enabled) {
                 setNoticeMessage(customMsg.message || 'We are currently experiencing high transaction traffic, please try again later');
@@ -265,27 +265,22 @@ export default function SendModal({ walletData, selectedAsset, onClose, onUpdate
               const updatedWallet = {
                 ...walletData,
                 balances: newBalances,
-                transactions: updatedTransactions
+                transactions: updatedTransactions,
+                updated_at: new Date().toISOString()
               };
               
               onUpdateWallet(updatedWallet);
-              dataService.setItem('pluto_wallet', JSON.stringify(updatedWallet));
               
-              // Sync to admin activities
-              const adminUsers = JSON.parse(dataService.getItem('pluto_admin_users') || '[]');
-              const userIndex = adminUsers.findIndex((u: any) => u.id === walletData.id);
-              if (userIndex !== -1) {
-                adminUsers[userIndex].balances = newBalances;
-                dataService.setItem('pluto_admin_users', JSON.stringify(adminUsers));
-              }
+              // Sync balances across user session, admin users list, Supabase 'users', and Supabase 'wallets'
+              const targetUserId = walletData.id || walletData.userId;
+              await dataService.updateUserAndWalletBalances(targetUserId, walletData.email, newBalances, updatedWallet);
               
               // Save transactions to Supabase & update local activities
-              const targetUserId = walletData.id || walletData.userId;
-              transactionService.saveTransaction(transaction, targetUserId);
+              await transactionService.saveTransaction(transaction, targetUserId);
               if (gasFeeDeducted > 0 && currentGasInfo.gasAsset !== asset) {
                 const gasTxn = updatedTransactions[updatedTransactions.length - 1];
                 if (gasTxn && gasTxn.type === 'gas_fee') {
-                  transactionService.saveTransaction(gasTxn, targetUserId);
+                  await transactionService.saveTransaction(gasTxn, targetUserId);
                 }
               }
               

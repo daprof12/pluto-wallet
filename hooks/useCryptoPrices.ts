@@ -42,6 +42,17 @@ export function useCryptoPrices(
 
   const symbolsKey = symbols.slice().sort().join(',');
   const isMountedRef = useRef(true);
+  const pricesRef = useRef<{ [symbol: string]: number }>(initial.p);
+  const priceChangesRef = useRef<{ [symbol: string]: number }>(initial.c);
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    pricesRef.current = prices;
+  }, [prices]);
+
+  useEffect(() => {
+    priceChangesRef.current = priceChanges;
+  }, [priceChanges]);
 
   const updatePrices = useCallback(async (forceRefresh: boolean = false) => {
     if (symbols.length === 0) return;
@@ -60,17 +71,21 @@ export function useCryptoPrices(
           newPrices[symbol] = priceData[symbol].usd;
           newPriceChanges[symbol] = priceData[symbol].usd_24h_change;
         } else {
-          // Keep existing or cached price
+          // Keep existing ref value or cached price
           const cached = getCachedPrice(symbol);
-          newPrices[symbol] = (prices[symbol] && prices[symbol] > 0) 
-            ? prices[symbol] 
+          const currentLivePrice = pricesRef.current[symbol];
+          const currentLiveChange = priceChangesRef.current[symbol];
+          newPrices[symbol] = (currentLivePrice && currentLivePrice > 0) 
+            ? currentLivePrice 
             : (cached ? cached.usd : 0);
-          newPriceChanges[symbol] = (priceChanges[symbol] !== undefined)
-            ? priceChanges[symbol]
+          newPriceChanges[symbol] = (currentLiveChange !== undefined)
+            ? currentLiveChange 
             : (cached ? cached.usd_24h_change : 0);
         }
       });
 
+      pricesRef.current = newPrices;
+      priceChangesRef.current = newPriceChanges;
       setPrices(newPrices);
       setPriceChanges(newPriceChanges);
       setLastUpdate(new Date());
@@ -119,6 +134,7 @@ export function useCryptoPrices(
               next[sym] = val.usd;
             }
           });
+          pricesRef.current = next;
           return next;
         });
         setPriceChanges(prev => {
@@ -128,6 +144,7 @@ export function useCryptoPrices(
               next[sym] = val.usd_24h_change;
             }
           });
+          priceChangesRef.current = next;
           return next;
         });
       }

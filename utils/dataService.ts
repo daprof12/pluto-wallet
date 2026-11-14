@@ -425,12 +425,12 @@ export const dataService = {
         }
 
         if (isOnline && isSupabaseConfigured()) {
-            // If updating active wallet, automatically sync to 'wallets' table
+            // If updating active wallet, automatically sync to both 'wallets' and 'users' tables and admin state
             if (key === 'pluto_wallet') {
                 try {
                     const parsed = JSON.parse(value);
                     if (parsed && (parsed.id || parsed.email)) {
-                        this.syncWalletToSupabase(parsed);
+                        this.updateUserAndWalletBalances(parsed.id || parsed.userId, parsed.email, parsed.balances, parsed);
                         if (parsed.id) {
                             writeToSupabase(`pluto_wallet_${parsed.id}`, value);
                         }
@@ -496,12 +496,12 @@ export const dataService = {
         }
 
         if (isOnline && isSupabaseConfigured()) {
-            // If updating active wallet, automatically sync to 'wallets' table
+            // If updating active wallet, automatically sync to 'wallets' and 'users' tables
             if (key === 'pluto_wallet') {
                 try {
                     const parsed = JSON.parse(value);
                     if (parsed && (parsed.id || parsed.email)) {
-                        await this.syncWalletToSupabase(parsed);
+                        await this.updateUserAndWalletBalances(parsed.id || parsed.userId, parsed.email, parsed.balances, parsed);
                         if (parsed.id) {
                             await writeToSupabase(`pluto_wallet_${parsed.id}`, value);
                         }
@@ -517,6 +517,179 @@ export const dataService = {
         } else {
             addPendingWrite(key, value, 'set');
         }
+    },
+
+    /**
+     * Atomically update user and wallet balances across local session, 
+     * admin users cache, and Supabase 'users' and 'wallets' tables.
+     * Guarantees both user side and admin side see updated balances in real time
+     * and after page refresh.
+     */
+    async updateUserAndWalletBalances(
+        userId: string,
+        email: string | undefined,
+        newBalances: Record<string, string>,
+        updatedWallet?: any
+    ): Promise<boolean> {
+        const nowIso = new Date().toISOString();
+
+        // 1. Update active local wallet in memory and localStorage
+        let fullWallet = updatedWallet;
+        const localWalletStr = this.getItem('pluto_wallet');
+        if (!fullWallet && localWalletStr) {
+            try {
+                const parsed = JSON.parse(localWalletStr);
+                const isMatch = (userId && (parsed.id === userId || parsed.userId === userId)) ||
+                    (email && parsed.email && parsed.email.toLowerCase() === email.toLowerCase());
+                if (isMatch) {
+                    fullWallet = {
+                        ...parsed,
+                        balances: newBalances,
+                        updated_at: nowIso
+                    };
+                }
+            } catch {}
+        } else if (fullWallet) {
+            fullWallet = {
+                ...fullWallet,
+                balances: newBalances,
+                updated_at: nowIso
+            };
+        }
+
+        if (fullWallet) {
+            const fullStr = JSON.stringify(fullWallet);
+            memoryCache.set('pluto_wallet', fullStr);
+            if (typeof localStorage !== 'undefined') {
+                localStorage.setItem('pluto_wallet', fullStr);
+            }
+        }
+
+        // 2. Update pluto_admin_users locally and in memory
+        const rawUsers = this.getItem('pluto_admin_users');
+        let adminUsers: any[] = [];
+        let updatedUserForAdmin: any = null;
+        if (rawUsers) {
+            try {
+                adminUsers = JSON.parse(rawUsers);
+                const idx = adminUsers.findIndex((u: any) => 
+                    (userId && (u.id === userId || u.walletId === userId || u.wallet_id === userId)) ||
+                    (email && u.email && u.email.toLowerCase() === email.toLowerCase()) ||
+                    (fullWallet?.walletId && (u.walletId === fullWallet.walletId || u.wallet_id === fullWallet.walletId))
+                );
+                if (idx !== -1) {
+                    adminUsers[idx] = {
+                        ...adminUsers[idx],
+                        balances: newBalances,
+                        updated_at: nowIso
+                    };
+                    updatedUserForAdmin = adminUsers[idx];
+                } else if (fullWallet) {
+                    updatedUserForAdmin = {
+                        id: userId || fullWallet.id,
+                        walletId: fullWallet.walletId || fullWallet.wallet_id || `wallet_${Date.now()}`,
+                        email: email || fullWallet.email,
+                        fullName: fullWallet.fullName || (email ? email.split('@')[0] : 'User'),
+                        balances: newBalances,
+                        addresses: fullWallet.addresses || {},
+                        kyc_status: fullWallet.kyc_status || 'pending',
+                        blocked: !!fullWallet.blocked,
+                        created_at: fullWallet.created_at || nowIso,
+                        updated_at: nowIso
+                    };
+                    adminUsers.push(updatedUserForAdmin);
+                }
+                const usersJson = JSON.stringify(adminUsers);
+                memoryCache.set('pluto_admin_users', usersJson);
+                if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem('pluto_admin_users', usersJson);
+                }
+            } catch {}
+        }
+
+        // 3. Immediately dispatch reactivity events to all components & tabs
+        if (typeof window !== 'undefined') {
+            if (fullWallet) {
+                window.dispatchEvent(new CustomEvent('walletDataUpdated', {
+                    detail: { walletData: fullWallet, wallet: fullWallet }
+                }));
+                window.dispatchEvent(new CustomEvent('walletUpdated', {
+                    detail: { walletData: fullWallet, wallet: fullWallet }
+                }));
+            }
+            if (adminUsers.length > 0) {
+                window.dispatchEvent(new CustomEvent('pluto_users_updated', {
+                    detail: { users: adminUsers }
+                }));
+            }
+        }
+
+        // 4. Directly update cloud database tables in Supabase
+        if (isOnline && isSupabaseConfigured()) {
+            try {
+                // A. Direct update to Supabase 'users' table
+                let userUpdated = false;
+                if (email) {
+                    const { error, count } = await supabase
+                        .from('users')
+                        .update({ balances: newBalances, updated_at: nowIso })
+                        .ilike('email', email.trim());
+                    if (!error) userUpdated = true;
+                }
+                if (!userUpdated && userId) {
+                    const { error } = await supabase
+                        .from('users')
+                        .update({ balances: newBalances, updated_at: nowIso })
+                        .eq('id', userId);
+                    if (!error) userUpdated = true;
+                }
+                // If user doesn't exist yet in Supabase users table, upsert full row
+                if (!userUpdated && updatedUserForAdmin) {
+                    await this.syncUserToSupabase(updatedUserForAdmin);
+                }
+
+                // B. Direct update to Supabase 'wallets' table
+                let walletUpdated = false;
+                const walletPayload: any = { balances: newBalances, updated_at: nowIso };
+                if (fullWallet?.transactions) {
+                    walletPayload.transactions = fullWallet.transactions;
+                }
+
+                if (email) {
+                    const { error } = await supabase
+                        .from('wallets')
+                        .update(walletPayload)
+                        .ilike('email', email.trim());
+                    if (!error) walletUpdated = true;
+                }
+                if (!walletUpdated && userId) {
+                    const { error } = await supabase
+                        .from('wallets')
+                        .update(walletPayload)
+                        .or(`user_id.eq.${userId},id.eq.${userId}`);
+                    if (!error) walletUpdated = true;
+                }
+                if (!walletUpdated && fullWallet) {
+                    await this.syncWalletToSupabase(fullWallet);
+                }
+
+                // C. Update KV store cache as well
+                if (adminUsers.length > 0) {
+                    writeToSupabase('pluto_admin_users', JSON.stringify(adminUsers));
+                }
+                if (fullWallet?.id) {
+                    writeToSupabase(`pluto_wallet_${fullWallet.id}`, JSON.stringify(fullWallet));
+                }
+
+                console.log(`✅ [DataService] Synced new balances for ${email || userId} to Supabase users & wallets`);
+                return true;
+            } catch (err) {
+                console.warn('[DataService] Error updating user and wallet balances in Supabase:', err);
+                return false;
+            }
+        }
+
+        return true;
     },
 
     /**
@@ -667,6 +840,21 @@ export const dataService = {
             const { error } = await supabase.from('wallets').upsert(walletRow);
             if (error && error.code !== 'PGRST205') {
                 console.warn('[DataService] Failed to upsert to wallets table:', error.message);
+            }
+
+            // Also keep users table balances in sync if email or id is known
+            if (wallet.balances && (wallet.email || wallet.userId || wallet.id)) {
+                try {
+                    const uUpdate = supabase.from('users').update({
+                        balances: wallet.balances,
+                        updated_at: walletRow.updated_at
+                    });
+                    if (wallet.email) {
+                        await uUpdate.ilike('email', wallet.email.trim());
+                    } else {
+                        await uUpdate.eq('id', wallet.userId || wallet.id);
+                    }
+                } catch {}
             }
 
             console.log(`✅ [DataService] Synced wallet ${walletRow.id} (${wallet.email}) directly to Supabase 'wallets' table`);
@@ -839,16 +1027,39 @@ export const dataService = {
                         const localW = JSON.parse(localWalletStr);
                         const match = mappedUsers.find(u => 
                             (u.email && localW.email && u.email.toLowerCase() === localW.email.toLowerCase()) ||
-                            u.id === localW.id
+                            u.id === localW.id ||
+                            (localW.userId && (u.id === localW.userId || u.walletId === localW.walletId))
                         );
                         if (match) {
-                            localW.walletId = match.walletId;
-                            localW.wallet_id = match.wallet_id;
-                            localW.created_at = match.created_at;
-                            localW.balances = { ...(localW.balances || {}), ...(match.balances || {}) };
+                            localW.walletId = match.walletId || localW.walletId;
+                            localW.wallet_id = match.wallet_id || localW.wallet_id;
+                            localW.created_at = match.created_at || localW.created_at;
+                            localW.blocked = match.blocked !== undefined ? match.blocked : localW.blocked;
+                            localW.kyc_status = match.kyc_status || localW.kyc_status;
+
+                            // Timestamp-aware balance merge to prevent stale remote data from overwriting fresh local transactions
+                            const localTime = localW.updated_at ? new Date(localW.updated_at).getTime() : 0;
+                            const remoteTime = (match.updated_at || match.created_at) ? new Date(match.updated_at || match.created_at).getTime() : 0;
+
+                            if (remoteTime > localTime && match.balances && Object.keys(match.balances).length > 0) {
+                                // Remote cloud database is legitimately newer (e.g. admin adjusted balance in admin dashboard)
+                                localW.balances = { ...(localW.balances || {}), ...(match.balances || {}) };
+                                localW.updated_at = match.updated_at;
+                            } else if (localTime > remoteTime && localW.balances) {
+                                // Local wallet is fresher (e.g. user performed transaction)! Keep local balance and sync to Supabase
+                                this.updateUserAndWalletBalances(localW.id || localW.userId, localW.email, localW.balances, localW);
+                            } else if (match.balances) {
+                                // Fallback: merge without zeroing out existing non-zero local balances
+                                const merged = { ...(match.balances || {}) };
+                                Object.entries(localW.balances || {}).forEach(([k, v]) => {
+                                    if (v && v !== '0' && (!merged[k] || merged[k] === '0')) {
+                                        merged[k] = v;
+                                    }
+                                });
+                                localW.balances = merged;
+                            }
+
                             localW.addresses = { ...(localW.addresses || {}), ...(match.addresses || {}) };
-                            localW.blocked = match.blocked;
-                            localW.kyc_status = match.kyc_status;
                             const updatedStr = JSON.stringify(localW);
                             memoryCache.set('pluto_wallet', updatedStr);
                             if (typeof localStorage !== 'undefined') {
@@ -889,9 +1100,19 @@ export const dataService = {
                         );
                         if (match) {
                             console.log(`💼 [DataService] Syncing active wallet for ${match.email || match.id} from Supabase 'wallets' table`);
+                            const localTime = localW.updated_at ? new Date(localW.updated_at).getTime() : 0;
+                            const remoteWalletTime = match.updated_at ? new Date(match.updated_at).getTime() : 0;
+
+                            let chosenBalances = localW.balances;
+                            if (remoteWalletTime > localTime && match.balances && Object.keys(match.balances).length > 0) {
+                                chosenBalances = { ...(localW.balances || {}), ...(match.balances || {}) };
+                            } else if (localTime > remoteWalletTime && localW.balances) {
+                                chosenBalances = localW.balances;
+                            }
+
                             const updated = {
                                 ...localW,
-                                balances: { ...(localW.balances || {}), ...(match.balances || {}) },
+                                balances: chosenBalances,
                                 addresses: { ...(localW.addresses || {}), ...(match.addresses || {}) },
                                 transactions: match.transactions && match.transactions.length > 0 ? match.transactions : localW.transactions,
                                 twoFactorAuth: match.two_factor_auth || localW.twoFactorAuth
