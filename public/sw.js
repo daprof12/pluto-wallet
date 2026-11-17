@@ -68,8 +68,8 @@ self.addEventListener('fetch', (event) => {
 
   // Skip cross-origin requests
   if (url.origin !== location.origin) {
-    // For API calls (CoinGecko, etc.), use network-first strategy
-    if (url.hostname.includes('coingecko.com') || url.hostname.includes('api.')) {
+    // For API calls (iTick, CoinGecko, etc.), use network-first strategy
+    if (url.hostname.includes('itick.org') || url.hostname.includes('coingecko.com') || url.hostname.includes('api.')) {
       event.respondWith(
         fetch(request)
           .then((response) => {

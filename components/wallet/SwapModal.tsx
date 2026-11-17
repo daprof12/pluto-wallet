@@ -88,7 +88,7 @@ export default function SwapModal({ walletData, onClose, onUpdateWallet, selecte
     return () => window.removeEventListener('assetConfigUpdated', handleAssetConfigUpdate);
   }, []);
   
-  // Real-time cryptocurrency prices from CoinGecko
+  // Real-time cryptocurrency prices from iTick API
   const { prices, loading: pricesLoading } = useCryptoPrices(
     assets.map(a => a.symbol),
     60000 // Update every 60 seconds

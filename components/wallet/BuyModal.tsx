@@ -52,7 +52,7 @@ export default function BuyModal({ onClose, selectedAsset, walletData, onUpdateW
     return () => window.removeEventListener('assetConfigUpdated', handleAssetConfigUpdate);
   }, []);
 
-  // Real-time prices from CoinGecko - MUST be before useEffect that uses it
+  // Real-time prices from iTick API - MUST be before useEffect that uses it
   const { prices } = useCryptoPrices(
     assets.map(a => a.symbol),
     60000 // Update every 60 seconds

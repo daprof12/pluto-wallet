@@ -1,17 +1,19 @@
 /**
  * Multi-Provider Real-Time Crypto Price Service
- * Fetches real-time cryptocurrency prices and 24h changes with multi-tier failover:
- * 1. Binance Public API (sub-100ms, 1200 req/min, ultra-lightweight)
- * 2. CryptoCompare Public API (fast failover, generous rate limits)
- * 3. CoinCap Public API (fast, reliable)
- * 4. CoinGecko & CoinPaprika fallback
+ * Primary Provider: iTick API (https://api0.itick.org - docs: https://docs.itick.io/)
+ * Fetches real-time cryptocurrency prices, 24h changes, and historical klines with multi-tier failover:
+ * 1. iTick Institutional API (Primary: region=BA, sub-100ms, batch quotes & klines)
+ * 2. Binance Public API (sub-100ms, 1200 req/min, ultra-lightweight)
+ * 3. CryptoCompare Public API (fast failover, generous rate limits)
+ * 4. CoinCap Public API (fast, reliable)
+ * 5. CoinGecko & CoinPaprika fallback
  * Features:
- * - Ultra-resilient dual-tier architecture: live real-time values never fail
+ * - High-speed real-time quotes via iTick with batch chunking (max 8 symbols/request)
  * - Granular per-symbol caching to prevent cache poisoning
  * - Persistent localStorage caching so prices are available on boot
  * - Stablecoin peg protection ($1.00 guarantee for USDT/USDC across all networks)
- * - Automatic custom symbol matching
- * - Multi-provider historical chart support (Binance Klines + CryptoCompare + CoinGecko)
+ * - Automatic custom symbol matching with `${symbol.toUpperCase()}USDT`
+ * - Multi-provider historical chart support (iTick Klines + Binance Klines + CryptoCompare + CoinGecko)
  */
 
 import { loadAssetConfig } from './assetConfig';
@@ -30,7 +32,41 @@ export interface CoinGeckoResponse {
   };
 }
 
-// Binance trading pair mapping (instant, no rate limits)
+// iTick API Configuration (docs: https://docs.itick.io/)
+export const ITICK_HOST = 'https://api0.itick.org';
+export const ITICK_TOKEN = '2ed11023fd304771997432228060b1fd5afacfcf69a14ee5bb0037df88d794e8';
+export const ITICK_REGION = 'BA'; // Binance exchange region
+
+// iTick trading pair mapping (Binance ecosystem)
+export const ITICK_PAIR_MAPPING: Record<string, string> = {
+  BTC: 'BTCUSDT',
+  ETH: 'ETHUSDT',
+  SOL: 'SOLUSDT',
+  BNB: 'BNBUSDT',
+  XRP: 'XRPUSDT',
+  ADA: 'ADAUSDT',
+  DOGE: 'DOGEUSDT',
+  TRX: 'TRXUSDT',
+  AVAX: 'AVAXUSDT',
+  MATIC: 'POLUSDT',
+  POL: 'POLUSDT',
+  LINK: 'LINKUSDT',
+  TON: 'TONUSDT',
+  SHIB: 'SHIBUSDT'
+};
+
+/**
+ * Resolve iTick trading pair code for any cryptocurrency symbol
+ */
+export function getITickPair(symbol: string): string {
+  const upper = symbol.toUpperCase();
+  if (ITICK_PAIR_MAPPING[upper]) {
+    return ITICK_PAIR_MAPPING[upper];
+  }
+  return `${upper}USDT`;
+}
+
+// Binance trading pair mapping (backup)
 const BINANCE_PAIR_MAPPING: Record<string, string> = {
   BTC: 'BTCUSDT',
   ETH: 'ETHUSDT',
@@ -114,25 +150,25 @@ const COINPAPRIKA_IDS: Record<string, string> = {
 
 // Realistic baseline fallbacks
 const MARKET_BASELINE_FALLBACK: PriceData = {
-  BTC: { usd: 90500.00, usd_24h_change: 0.5 },
-  ETH: { usd: 2850.00, usd_24h_change: -0.1 },
-  SOL: { usd: 135.25, usd_24h_change: 0.6 },
-  BNB: { usd: 810.50, usd_24h_change: -1.5 },
+  BTC: { usd: 64800.00, usd_24h_change: 0.5 },
+  ETH: { usd: 1835.00, usd_24h_change: 1.2 },
+  SOL: { usd: 72.80, usd_24h_change: 2.1 },
+  BNB: { usd: 593.50, usd_24h_change: 0.8 },
   USDT: { usd: 1.00, usd_24h_change: 0.0 },
   USDT_ERC20: { usd: 1.00, usd_24h_change: 0.0 },
   USDT_BEP20: { usd: 1.00, usd_24h_change: 0.0 },
   USDT_TRC20: { usd: 1.00, usd_24h_change: 0.0 },
   USDC: { usd: 1.00, usd_24h_change: 0.0 },
-  XRP: { usd: 1.85, usd_24h_change: 4.2 },
-  ADA: { usd: 0.320, usd_24h_change: 2.1 },
-  DOGE: { usd: 0.125, usd_24h_change: 1.5 },
-  TRX: { usd: 0.355, usd_24h_change: -0.4 },
-  AVAX: { usd: 14.50, usd_24h_change: 0.8 },
-  MATIC: { usd: 0.220, usd_24h_change: -1.2 },
-  POL: { usd: 0.220, usd_24h_change: -1.2 },
-  LINK: { usd: 15.20, usd_24h_change: -0.2 },
-  TON: { usd: 2.10, usd_24h_change: -0.5 },
-  SHIB: { usd: 0.00000850, usd_24h_change: 1.8 }
+  XRP: { usd: 0.96, usd_24h_change: 1.2 },
+  ADA: { usd: 0.154, usd_24h_change: 0.9 },
+  DOGE: { usd: 0.059, usd_24h_change: 0.8 },
+  TRX: { usd: 0.306, usd_24h_change: 1.0 },
+  AVAX: { usd: 7.18, usd_24h_change: 0.6 },
+  MATIC: { usd: 0.081, usd_24h_change: 2.5 },
+  POL: { usd: 0.081, usd_24h_change: 2.5 },
+  LINK: { usd: 9.20, usd_24h_change: 0.8 },
+  TON: { usd: 1.60, usd_24h_change: 1.0 },
+  SHIB: { usd: 0.00000387, usd_24h_change: 0.2 }
 };
 
 interface CachedPriceItem {
@@ -222,19 +258,90 @@ function getCoinGeckoIdMapping(): Record<string, string> {
 /**
  * Helper: Check if a symbol represents a stablecoin pegged to 1.00 USD
  */
-function isStablecoin(symbol: string): boolean {
-  return symbol.startsWith('USDT') || symbol.startsWith('USDC') || symbol === 'DAI' || symbol === 'BUSD';
+export function isStablecoin(symbol: string): boolean {
+  const upper = symbol.toUpperCase();
+  return upper.startsWith('USDT') || upper.startsWith('USDC') || upper === 'DAI' || upper === 'BUSD';
 }
 
 /**
- * Provider 1: Binance Public API (sub-100ms, ultra-lightweight, 1200 req/min)
+ * Provider 1 (PRIMARY): iTick Public API (https://api0.itick.org)
+ * Ultra-fast institutional market data for Binance crypto ecosystem (region=BA)
+ * Handles quotes with batch chunking (max 8 codes/call to respect tier limit)
+ */
+export async function fetchPricesFromITick(symbols: string[]): Promise<PriceData> {
+  const result: PriceData = {};
+  const nonStable = symbols.filter(s => !isStablecoin(s));
+  if (nonStable.length === 0) return result;
+
+  const codeToSymbols: Record<string, string[]> = {};
+  nonStable.forEach(sym => {
+    const code = getITickPair(sym);
+    if (!codeToSymbols[code]) {
+      codeToSymbols[code] = [];
+    }
+    codeToSymbols[code].push(sym);
+  });
+
+  const uniqueCodes = Object.keys(codeToSymbols);
+  const CHUNK_SIZE = 8;
+  const chunks: string[][] = [];
+  for (let i = 0; i < uniqueCodes.length; i += CHUNK_SIZE) {
+    chunks.push(uniqueCodes.slice(i, i + CHUNK_SIZE));
+  }
+
+  const chunkPromises = chunks.map(async chunk => {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+
+      const url = `${ITICK_HOST}/crypto/quotes?region=${ITICK_REGION}&codes=${encodeURIComponent(chunk.join(','))}`;
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'token': ITICK_TOKEN,
+          'Accept': 'application/json'
+        }
+      });
+      clearTimeout(timeout);
+
+      if (response.ok) {
+        const json = await response.json();
+        if (json && json.code === 0 && json.data) {
+          Object.entries(json.data).forEach(([code, item]: [string, any]) => {
+            if (item && item.ld !== undefined && item.ld !== null) {
+              const usd = typeof item.ld === 'number' ? item.ld : parseFloat(item.ld);
+              const change = typeof item.chp === 'number' ? item.chp : parseFloat(item.chp || '0');
+              if (!isNaN(usd) && usd > 0) {
+                const mappedSymbols = codeToSymbols[code] || [];
+                mappedSymbols.forEach(s => {
+                  result[s] = {
+                    usd,
+                    usd_24h_change: isNaN(change) ? 0 : change
+                  };
+                });
+              }
+            }
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('iTick chunk quote fetch failed for:', chunk, e);
+    }
+  });
+
+  await Promise.allSettled(chunkPromises);
+  return result;
+}
+
+/**
+ * Provider 2: Binance Public API (sub-100ms, ultra-lightweight, 1200 req/min)
  */
 async function fetchPricesFromBinance(symbols: string[]): Promise<PriceData> {
   const result: PriceData = {};
   const pairsToFetch: { symbol: string; pair: string }[] = [];
 
   symbols.forEach(sym => {
-    const pair = BINANCE_PAIR_MAPPING[sym];
+    const pair = BINANCE_PAIR_MAPPING[sym] || getITickPair(sym);
     if (pair) {
       pairsToFetch.push({ symbol: sym, pair });
     }
@@ -291,7 +398,7 @@ async function fetchPricesFromBinance(symbols: string[]): Promise<PriceData> {
 }
 
 /**
- * Provider 2: CryptoCompare Public API (generous rate limits, fast response)
+ * Provider 3: CryptoCompare Public API (generous rate limits, fast response)
  */
 async function fetchPricesFromCryptoCompare(symbols: string[]): Promise<PriceData> {
   const result: PriceData = {};
@@ -330,7 +437,7 @@ async function fetchPricesFromCryptoCompare(symbols: string[]): Promise<PriceDat
 }
 
 /**
- * Provider 3: CoinCap Public API
+ * Provider 4: CoinCap Public API
  */
 async function fetchPricesFromCoinCap(symbols: string[]): Promise<PriceData> {
   const result: PriceData = {};
@@ -374,7 +481,7 @@ async function fetchPricesFromCoinCap(symbols: string[]): Promise<PriceData> {
 }
 
 /**
- * Provider 4: CoinGecko API
+ * Provider 5: CoinGecko API
  */
 async function fetchPricesFromCoinGecko(symbols: string[]): Promise<PriceData> {
   const result: PriceData = {};
@@ -415,7 +522,7 @@ async function fetchPricesFromCoinGecko(symbols: string[]): Promise<PriceData> {
 }
 
 /**
- * Provider 5: CoinPaprika API (targeted single-ticker queries for remaining missing coins)
+ * Provider 6: CoinPaprika API (targeted single-ticker queries for remaining missing coins)
  */
 async function fetchPricesFromCoinPaprika(symbols: string[]): Promise<PriceData> {
   const result: PriceData = {};
@@ -485,16 +592,27 @@ export async function fetchCryptoPrices(symbols: string[], forceRefresh: boolean
   // Multi-tier price fetch strategy
   let fetchedData: PriceData = {};
 
-  // Tier 1: Binance API (fastest, lightweight, 1200 req/min)
+  // Tier 1 (PRIMARY): iTick API (institutional real-time market data)
   try {
-    const binancePrices = await fetchPricesFromBinance(symbolsToFetch);
-    fetchedData = { ...binancePrices };
+    const itickPrices = await fetchPricesFromITick(symbolsToFetch);
+    fetchedData = { ...itickPrices };
   } catch (e) {
-    console.warn('Binance provider failed, using fallback:', e);
+    console.warn('iTick primary provider failed, using fallback:', e);
   }
 
-  // Tier 2: CryptoCompare for any missing symbols
+  // Tier 2: Binance API (backup, sub-100ms, lightweight, 1200 req/min)
   let missing = symbolsToFetch.filter(s => !fetchedData[s] || fetchedData[s].usd <= 0);
+  if (missing.length > 0) {
+    try {
+      const binancePrices = await fetchPricesFromBinance(missing);
+      Object.assign(fetchedData, binancePrices);
+    } catch (e) {
+      console.warn('Binance provider failed, using fallback:', e);
+    }
+  }
+
+  // Tier 3: CryptoCompare for any missing symbols
+  missing = symbolsToFetch.filter(s => !fetchedData[s] || fetchedData[s].usd <= 0);
   if (missing.length > 0) {
     try {
       const ccPrices = await fetchPricesFromCryptoCompare(missing);
@@ -502,7 +620,7 @@ export async function fetchCryptoPrices(symbols: string[], forceRefresh: boolean
     } catch {}
   }
 
-  // Tier 3: CoinCap for any still-missing symbols
+  // Tier 4: CoinCap for any still-missing symbols
   missing = symbolsToFetch.filter(s => !fetchedData[s] || fetchedData[s].usd <= 0);
   if (missing.length > 0) {
     try {
@@ -511,7 +629,7 @@ export async function fetchCryptoPrices(symbols: string[], forceRefresh: boolean
     } catch {}
   }
 
-  // Tier 4: CoinGecko for any still-missing symbols
+  // Tier 5: CoinGecko for any still-missing symbols
   missing = symbolsToFetch.filter(s => !fetchedData[s] || fetchedData[s].usd <= 0);
   if (missing.length > 0) {
     try {
@@ -520,7 +638,7 @@ export async function fetchCryptoPrices(symbols: string[], forceRefresh: boolean
     } catch {}
   }
 
-  // Tier 5: CoinPaprika targeted lookup for any still-missing symbols
+  // Tier 6: CoinPaprika targeted lookup for any still-missing symbols
   missing = symbolsToFetch.filter(s => !fetchedData[s] || fetchedData[s].usd <= 0);
   if (missing.length > 0) {
     try {
@@ -644,9 +762,10 @@ export function clearPriceCache(): void {
 
 /**
  * Fetch historical price data for charts with multi-provider failover:
- * 1. Binance Klines (fast, reliable, no 429 rate limits)
- * 2. CryptoCompare histoday
- * 3. CoinGecko market_chart
+ * 1. iTick Klines (PRIMARY: institutional BA candles, 1h for 24h, 1d for 7d/30d)
+ * 2. Binance Klines (fast, reliable backup)
+ * 3. CryptoCompare histoday
+ * 4. CoinGecko market_chart
  */
 export async function fetchHistoricalPrices(symbol: string, days: number = 7): Promise<[number, number][]> {
   // Stablecoin flatline chart
@@ -660,13 +779,51 @@ export async function fetchHistoricalPrices(symbol: string, days: number = 7): P
     return flat;
   }
 
-  // 1. Try Binance Klines first
-  const binancePair = BINANCE_PAIR_MAPPING[symbol];
+  // 1. Try iTick Klines first (PRIMARY)
+  try {
+    const pair = getITickPair(symbol);
+    const kType = days <= 1 ? 5 : 8; // 5 = 1 hour, 8 = 1 day
+    const limit = days <= 1 ? 24 : days;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+
+    const url = `${ITICK_HOST}/crypto/kline?region=${ITICK_REGION}&code=${pair}&kType=${kType}&limit=${limit}`;
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'token': ITICK_TOKEN,
+        'Accept': 'application/json'
+      }
+    });
+    clearTimeout(timeout);
+
+    if (response.ok) {
+      const json = await response.json();
+      if (json && json.code === 0 && Array.isArray(json.data) && json.data.length > 0) {
+        const points: [number, number][] = json.data
+          .filter((item: any) => item && item.t && (item.c !== undefined && item.c !== null))
+          .map((item: any) => [
+            typeof item.t === 'number' ? item.t : parseInt(item.t, 10),
+            typeof item.c === 'number' ? item.c : parseFloat(item.c)
+          ]);
+        if (points.length > 0) {
+          return points.sort((a, b) => a[0] - b[0]);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`iTick klines for ${symbol} failed, falling back:`, e);
+  }
+
+  // 2. Try Binance Klines
+  const binancePair = BINANCE_PAIR_MAPPING[symbol] || getITickPair(symbol);
   if (binancePair) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
-      const url = `https://api.binance.com/api/v3/klines?symbol=${binancePair}&interval=1d&limit=${days}`;
+      const interval = days <= 1 ? '1h' : '1d';
+      const limit = days <= 1 ? 24 : days;
+      const url = `https://api.binance.com/api/v3/klines?symbol=${binancePair}&interval=${interval}&limit=${limit}`;
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeout);
       if (response.ok) {
@@ -678,11 +835,13 @@ export async function fetchHistoricalPrices(symbol: string, days: number = 7): P
     } catch {}
   }
 
-  // 2. Try CryptoCompare histoday
+  // 3. Try CryptoCompare histoday / histohour
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 4000);
-    const url = `https://min-api.cryptocompare.com/data/v2/histoday?fsym=${symbol}&tsym=USD&limit=${days}`;
+    const endpoint = days <= 1 ? 'histohour' : 'histoday';
+    const limit = days <= 1 ? 24 : days;
+    const url = `https://min-api.cryptocompare.com/data/v2/${endpoint}?fsym=${symbol}&tsym=USD&limit=${limit}`;
     const response = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     if (response.ok) {
@@ -694,14 +853,14 @@ export async function fetchHistoricalPrices(symbol: string, days: number = 7): P
     }
   } catch {}
 
-  // 3. Fallback to CoinGecko
+  // 4. Fallback to CoinGecko
   const mapping = getCoinGeckoIdMapping();
   const coinId = mapping[symbol] || DEFAULT_COINGECKO_IDS[symbol];
   if (coinId) {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
-      const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}&interval=daily`;
+      const url = `https://api.coingecko.com/api/v3/coins/${coinId}/market_chart?vs_currency=usd&days=${days}&interval=${days <= 1 ? 'hourly' : 'daily'}`;
       const response = await fetch(url, { signal: controller.signal });
       clearTimeout(timeout);
       if (response.ok) {

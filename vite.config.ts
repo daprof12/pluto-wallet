@@ -80,6 +80,20 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
         runtimeCaching: [
           {
+            urlPattern: /^https:\/\/api0\.itick\.org\/.*/i,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'itick-api-cache',
+              expiration: {
+                maxEntries: 100,
+                maxAgeSeconds: 60 * 5 // 5 minutes
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          },
+          {
             urlPattern: /^https:\/\/api\.coingecko\.com\/.*/i,
             handler: 'CacheFirst',
             options: {

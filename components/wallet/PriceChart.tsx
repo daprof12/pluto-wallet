@@ -24,10 +24,12 @@ export default function PriceChart({ symbol, currentPrice, priceChange, darkMode
         
         if (historicalData.length > 0) {
           const formattedData = historicalData.map(([timestamp, price]) => ({
-            time: new Date(timestamp).toLocaleDateString('en-US', { 
-              month: 'short', 
-              day: 'numeric' 
-            }),
+            time: timeRange === '24h'
+              ? new Date(timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+              : new Date(timestamp).toLocaleDateString('en-US', { 
+                  month: 'short', 
+                  day: 'numeric' 
+                }),
             price: price,
             timestamp
           }));

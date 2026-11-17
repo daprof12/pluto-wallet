@@ -168,7 +168,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     coinGeckoId: ''
   });
 
-  // Real-time price data from CoinGecko API
+  // Real-time price data from iTick API
   const [prices, setPrices] = useState<{[key: string]: number}>({
     BTC: 45230.50,
     ETH: 3420.75,
@@ -196,7 +196,7 @@ export default function AdminDashboard({ onBack, darkMode = false, onToggleDarkM
     saveAssetConfig(assetConfig);
   }, [assetConfig]);
 
-  // Fetch real-time cryptocurrency prices from CoinGecko
+  // Fetch real-time cryptocurrency prices from iTick API
   useEffect(() => {
     const updatePrices = async () => {
       setPricesLoading(true);
